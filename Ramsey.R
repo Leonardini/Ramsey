@@ -223,22 +223,57 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, symOnly = TRUE, maxOrder = 2 * 
 ### The graph will be the first (respectively, all) of the input graphs provided (allGraphs) to yield a non-trivial bound
 ### The allGraphAdj variable contains all the distinct permuted versions of each graph's adjacency list in the same order
 ### that also contain relevant information in graphInfo (in particular, whose indices are contained in its first column).
-findNextGraph = function(numVertices, allGraphs, allGraphAdj, boundTab, graphInfo) {
+findNextGraph = function(numVertices, allGraphs, allGraphAdj, boundTab, graphInfo, nRound = 0) {
   L = nrow(graphInfo)
   prep        = prepareRamseyLP(numVertices = numVertices, allGraphAdj = allGraphAdj, graphBounds = boundTab, graphInfo = graphInfo, sparse = TRUE)
+  fname = paste0("TempFileRound", nRound, ".lp")
+  numConst = length(prep$dir)
+  numNonZeros = tail(prep$mat@p,1)
+  ### Writing the model (with no objective function!) into an LP file with GLPK
+  model = glpkAPI::initProbGLPK()
+  glpkAPI::setProbNameGLPK(model, "Ramsey Polytope Optimisation")
+  glpkAPI::addColsGLPK(model, ncols = numVars)
+  glpkAPI::setColsBndsGLPK(model, j = seq_len(numVars), lb = rep(0, numVars), ub = rep(1, numVars), type = rep(glpkAPI::GLP_DB, numVars))
+  glpkAPI::setColKindGLPK(model, j = seq_len(numVars), kind = rep(glpkAPI::GLP_CV, numVars))
+  glpkAPI::addRowsGLPK(model, nrows = numConst)
+  glpkAPI::loadMatrixGLPK(model, ne = numNonZeros, ia = prep$mat@i + 1, ja = rep(1:numVars, diff(prep$mat@p)), ra = rep(1, numNonZeros))
+  rowTypes = ifelse(prep$dir == "G", glpkAPI::GLP_LO, glpkAPI::GLP_UP)
+  glpkAPI::setRowsBndsGLPK(model, i = seq_len(numConst), lb = ifelse(prep$dir == "L", 0, prep$rhs), ub = ifelse(prep$dir == "G", 0, prep$rhs), type = rowTypes)
+  glpkAPI::writeLPGLPK(model, fname = fname)
   numConst    = nrow(prep$mat)
   numVars     = choose(numVertices, 2)
   print(paste("There are", numConst, "constraints over", numVars, "variables"))
   output      = vector("list", L)
   auxMatrix   = createPositionMatrix(numVertices)
   print(paste("There are", L, "graphs to process"))
+  ### Creating a matrix whose rows are the different objective vectors required
+  objMat     = matrix(0, L, numVars)
   for (ind in 1:L) {
-    print(ind)
-    curResult  = NULL
     curRow     = graphInfo %>% slice(ind)
     curGraph   = allGraphs[[curRow$index]]
     curEdges   = auxMatrix[as_edgelist(curGraph)]
-    curResultL = solveRamseyLP(prep, numVertices, curEdges, lower = TRUE)
+    objMat[ind, curEdges] = 1
+  }
+  outputFiles  = paste0("Solution", nRound, "G", outer(c("Lower", "Upper"), 1:L, function(x,y) {paste0(y,x)}), ".sol")
+  initDir <- getwd()
+  setwd(CPLEX_DIR)
+  system(paste('source ~/.bash_profile; ./cplex -c', 
+               paste('"', paste('read', fname,                          collapse = ' '), '"', collapse = ""), 
+               paste('"', paste('set', 'preprocessing', 'presolve', 0,  collapse = ' '), '"', collapse = ""),
+               paste('"', paste('set', 'lpmethod', 2,                   collapse = ' '), '"', collapse = ""),
+               for (index in 1:L) {
+                change objective objMat[ind,]
+                change sense 0 min
+                paste('"', 'optimize',                                                   '"', collapse = ""),
+                paste('"', paste('write', outputFiles[index * 2 - 1],   collapse = ' '), '"', collapse = ""),
+                change sense 0 max
+                paste('"', 'optimize',                                                   '"', collapse = ""),
+                paste('"', paste('write', outputFiles[index * 2],       collapse = ' '), '"', collapse = ""),
+               }
+               paste('"', 'quit',                                                     '"', collapse = "")))
+  setwd(initDir)
+  for (ind in 1:L) {
+    curResultL = parseResults(outputFiles[ind * 2 - 1])
     curObjL    = curResultL$obj
     boundL     = as.integer(ifelse(near(curObjL, round(curObjL)), round(curObjL), ceiling(curObjL)))
     curDualsL  = curResultL$extra$lambda
@@ -246,7 +281,7 @@ findNextGraph = function(numVertices, allGraphs, allGraphAdj, boundTab, graphInf
     if (boundL >= 1               && !(all(near(curDualsL[1:numConst], 0)))) {
       proofL   = constructProof(prep, curDualsL[1:numConst], lower = TRUE, short = TRUE)
     }
-    curResultU = solveRamseyLP(prep, numVertices, curEdges, lower = FALSE)
+    curResultU = parseResults(outputFiles[ind * 2])
     curObjU    = curResultU$obj
     boundU     = as.integer(ifelse(near(curObjU, round(curObjU)), round(curObjU), floor(curObjU)))
     curDualsU  = curResultU$extra$lambda
@@ -346,9 +381,6 @@ solveRamseyLP = function(prep, numVertices, curEdges, lower = TRUE, GLPK = FALSE
     glpkAPI::setRowsBndsGLPK(model, i = seq_len(numConst), lb = ifelse(prep$dir == "L", 0, prep$rhs), ub = ifelse(prep$dir == "G", 0, prep$rhs), type = rowTypes)
     glpkAPI::writeLPGLPK(model, fname = fname)
     ### CONTINUE FROM HERE TO CALLING CPLEX AND EXTRACTING A SOLUTION (OBJECTIVE + DUAL VARIABLES)
-  } else {
-    control = list(trace = 0, preind = 0, method = 2)
-    solution = Rcplex(cvec = objVec, Amat = prep$mat, bvec = prep$rhs, lb = 0, ub = 1, objsense = ifelse(lower, "min", "max"), sense = prep$dir, control = control)
   }
   solution
 }

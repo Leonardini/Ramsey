@@ -1,3 +1,80 @@
+### This function finds bounds on the number of red edges in a graph
+### The Ramsey polytope is constructed over the specified order, numVertices; known bounds are provided via boundTab
+### The graph will be the first (respectively, all) of the input graphs provided (allGraphs) to yield a non-trivial bound
+### The allGraphAdj variable contains all the distinct permuted versions of each graph's adjacency list in the same order
+### that also contain relevant information in graphInfo (in particular, whose indices are contained in its first column).
+findNextGraph = function(numVertices, allGraphs, allGraphAdj, boundTab, graphInfo) {
+  L = nrow(graphInfo)
+  prep        = prepareRamseyLP(numVertices = numVertices, allGraphAdj = allGraphAdj, graphBounds = boundTab, graphInfo = graphInfo, sparse = TRUE)
+  numConst    = nrow(prep$mat)
+  numVars     = choose(numVertices, 2)
+  print(paste("There are", numConst, "constraints over", numVars, "variables"))
+  output      = vector("list", L)
+  auxMatrix   = createPositionMatrix(numVertices)
+  print(paste("There are", L, "graphs to process"))
+  control    = list(trace = 0, preind = 0, method = 2)
+  objVec     = rep(0, numVars)
+  for (ind in 1:L) {
+    print(ind)
+    curResult  = NULL
+    curRow     = graphInfo %>% slice(ind)
+    curGraph   = allGraphs[[curRow$index]]
+    curEdges   = auxMatrix[as_edgelist(curGraph)]
+    curObjVec  = objVec
+    curObjVec[curEdges] = 1
+    curResultL = Rcplex(cvec = curObjVec, Amat = prep$mat, bvec = prep$rhs, lb = 0, ub = 1, objsense = "min", sense = prep$dir, control = control)
+    curObjL    = curResultL$obj
+    boundL     = as.integer(ifelse(near(curObjL, round(curObjL)), round(curObjL), ceiling(curObjL)))
+    curDualsL  = curResultL$extra$lambda
+    proofL     = NULL
+    if (boundL >= 1               && !(all(near(curDualsL[1:numConst], 0)))) {
+      proofL   = constructProof(prep, curDualsL[1:numConst], lower = TRUE, short = TRUE)
+    }
+    curResultU = Rcplex(cvec = curObjVec, Amat = prep$mat, bvec = prep$rhs, lb = 0, ub = 1, objsense = "max", sense = prep$dir, control = control)
+    curObjU    = curResultU$obj
+    boundU     = as.integer(ifelse(near(curObjU, round(curObjU)), round(curObjU), floor(curObjU)))
+    curDualsU  = curResultU$extra$lambda
+    proofU     = NULL
+    if (boundU <= curRow$size - 1 && !(all(near(curDualsU[1:numConst], 0)))) {
+      proofU   = constructProof(prep, curDualsU[1:numConst], lower = FALSE, short = TRUE)
+    }
+    if (!is.null(proofL) || !is.null(proofU)) {
+      curResult = list(graph = curRow$index, proofL = proofL, proofU = proofU, boundL = boundL, boundU = boundU)
+    }
+    output[[ind]] = curResult
+  }
+  output
+}
+
+### This function optimises the number of red edges in a graph, represented by its edge 
+### indices, over the Ramsey polytope on numVertices vertices (so 0 <= curEdges <= nC2)
+solveRamseyLP = function(prep, numVertices, curEdges, lower = TRUE, GLPK = FALSE) {
+  numVars = choose(numVertices, 2)
+  objVec = rep(0, numVars)
+  objVec[curEdges] = 1
+  if (GLPK) {
+    fname = "TempFile.lp"
+    numConst = length(prep$dir)
+    numNonZeros = tail(prep$mat@p,1)
+    model = glpkAPI::initProbGLPK()
+    glpkAPI::setProbNameGLPK(model, "Ramsey Polytope Optimisation")
+    glpkAPI::setObjDirGLPK(model, ifelse(lower, glpkAPI::GLP_MIN, glpkAPI::GLP_MAX))
+    glpkAPI::addColsGLPK(model, ncols = numVars)
+    glpkAPI::setColsBndsObjCoefsGLPK(model, j = seq_len(numVars), lb = rep(0, numVars), ub = rep(1, numVars), obj_coef = objVec, type = rep(glpkAPI::GLP_DB, numVars))
+    glpkAPI::setColKindGLPK(model, j = seq_len(numVars), kind = rep(glpkAPI::GLP_CV, numVars))
+    glpkAPI::addRowsGLPK(model, nrows = numConst)
+    glpkAPI::loadMatrixGLPK(model, ne = numNonZeros, ia = prep$mat@i + 1, ja = rep(1:numVars, diff(prep$mat@p)), ra = rep(1, numNonZeros))
+    rowTypes = ifelse(prep$dir == "G", glpkAPI::GLP_LO, glpkAPI::GLP_UP)
+    glpkAPI::setRowsBndsGLPK(model, i = seq_len(numConst), lb = ifelse(prep$dir == "L", 0, prep$rhs), ub = ifelse(prep$dir == "G", 0, prep$rhs), type = rowTypes)
+    glpkAPI::writeLPGLPK(model, fname = fname)
+    ### CONTINUE FROM HERE TO CALLING CPLEX AND EXTRACTING A SOLUTION (OBJECTIVE + DUAL VARIABLES)
+  } else {
+    control = list(trace = 0, preind = 0, method = 2)
+    solution = Rcplex(cvec = objVec, Amat = prep$mat, bvec = prep$rhs, lb = 0, ub = 1, objsense = ifelse(lower, "min", "max"), sense = prep$dir, control = control)
+  }
+  solution
+}
+
 ### This code used to be part of the prepareRamseyLP function
 if (curLength == 2) {
   allPermEdges = matrix(allPermEdges, ncol = curNOpts)
