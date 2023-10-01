@@ -1,0 +1,8 @@
+source("Ramsey.R")
+# Q = findMinimalGraphSet(inds = c(3, 9, 2, 4, 5, 7, 8, 10, 11, 15, 18, 19, 20, 22, 24, 29, 37))
+# Q = findMinimalGraphSet(extremeOnly = FALSE, inds = c(3, 9, 4, 8, 10, 13, 20, 21, 23, 25, 27, 28, 29, 30, 31, 37, 50, 63, 71, 72, 87, 91, 95, 98, 103, 104, 111, 116, 120, 122, 125, 134, 135, 139, 141, 142))
+# Q = findMinimalGraphSet(extremeOnly = FALSE, inds = c(3, 9, 4, 8, 10, 13, 20, 21, 23, 25, 27, 28, 29, 30, 31, 37, 50, 63, 71, 91, 95, 98, 103, 111, 116, 120, 122, 125, 134, 141))
+# Q = findMinimalGraphSet(extremeOnly = TRUE, veryExtreme = TRUE,  maxOrder = 8L, inds = c(3, 9, 2, 4, 5, 6, 7, 8, 10, 11, 13, 14, 15, 16, 17, 18, 21, 22, 24, 25, 26, 29, 30, 34, 40, 41, 43, 44, 50, 53))
+# save(Q, file = "ResultsR3S4MinimalTreesAndKUpTo8.RData")
+Z = iterateLPProof(n = 18L, r = 4L, s = 4L, symOnly = FALSE, maxOrder = 15L, minAuto = NULL, extremeOnly = FALSE, symRS = TRUE, shortProofs = TRUE, inds = NULL, treesOnly = TRUE)
+save(Z, file = "ProofR4S4Trees.RData")

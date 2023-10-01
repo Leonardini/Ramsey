@@ -1,3 +1,196 @@
+### Obsolete constants
+NUM_ATLAS_GRAPHS = 1252L
+MAX_ATLAS_SIZE   = 7L
+
+### This function extracts small graphs from the graph atlas provided in igraph
+### Note: it skips graph 0 (empty graph) and graph 1 (the single vertex graph)!
+### If extremeOnly = TRUE, only keeps the graphs with sizes within 1 of min/max.
+### If symOnly = TRUE, only keeps those with a smaller than average orbit (per order)
+getSmallGraphs = function(numGraphs = NUM_ATLAS_GRAPHS, symOnly = FALSE, extremeOnly = FALSE) {
+  fn = paste0("AtlasGraphs", ifelse(extremeOnly, "Extreme", ""), ifelse(symOnly, "Sym", ""), ".RData")
+  if (!file.exists(fn)) {
+    allG = vector("list", numGraphs)
+    pos = 1
+    for (ind in 1:numGraphs) {
+      curG = graph_from_atlas(ind)
+      if (is.connected(curG) & gorder(curG) > 1) {
+        allG[[pos]] = curG
+        pos = pos + 1
+      }
+    }
+    allG = allG[1:(pos - 1)]
+    if (extremeOnly) {
+      orders = sapply(allG, gorder)
+      sizes  = sapply(allG, gsize)
+      goodGraphs = which(sizes <= orders | sizes >= choose(orders, 2) - 1)
+      allG = allG[goodGraphs]
+    }
+    if (symOnly) {
+      numAutos = as.integer(sapply(allG, automorphisms)["group_size",])
+      graphTab = tibble(index = 1:(pos - 1), order = sapply(allG, gorder), orbit = factorial(order)/numAutos)
+      finalGraphs = graphTab %>%
+        group_by(order) %>%
+        mutate(meanOrbit = mean(orbit), betterA = (orbit < meanOrbit)) %>%
+        ungroup() %>%
+        filter(betterA) %>%
+        pull(index)
+      allG %<>% magrittr::extract(finalGraphs)
+    } 
+    save(allG, file = fn)
+  }
+  else {
+    e = new.env()
+    load(fn, envir = e)
+    allG = get("allG", envir = e)
+  }
+  allG
+}
+
+### Obsolete code from getMediumGraphs
+numGraphs = L/4
+allG      = vector("list", numGraphs)
+for (ind in 1:numGraphs) {
+  if (ind %% 10000 == 0) {
+    print(ind)
+  }
+  allG[[ind]] = curText[ind] %>% 
+    str_split("  ") %>% 
+    unlist %>% 
+    str_split_fixed(" ", n = 2) %>% 
+    as.numeric() %>% 
+    matrix(ncol = 2) %>%
+    t() %>%
+    magrittr::add(1) %>%
+    graph(., directed = FALSE)
+}
+if (symOnly) {
+  numAutos = as.integer(sapply(allG, automorphisms)["group_size",])
+  numPerms = factorial(numVerts)
+  graphTab = tibble(index = 1:numGraphs, orbit = numPerms/numAutos)
+  finalGraphs = graphTab %>%
+    mutate(meanOrbit = mean(orbit), betterA = (orbit < meanOrbit)) %>%
+    filter(betterA) %>%
+    pull(index)
+  allG %<>% magrittr::extract(finalGraphs)
+}
+
+### Obsolete code from iterateLPProof
+# allGraphs = getSmallGraphs(symOnly = symOnly, extremeOnly = extremeOnly)
+# if (maxOrder > MAX_ATLAS_SIZE) {
+#   for (medSize in (MAX_ATLAS_SIZE + 1):maxOrder) {
+#     allGraphs %<>% c(getMediumGraphs(medSize, extremeOnly = extremeOnly))
+#   }
+# }
+# 
+# graphTab    = tibble(size = sapply(allGraphs, gsize), order = sapply(allGraphs, gorder), n_auto = as.integer(sapply(allGraphs, automorphisms)["group_size",]))
+# 
+# else {
+#   curSupport   = curSupport + 1
+#   if (curSupport >= curOrder + 3 && curOrder < maxOrder) {
+#     curOrder   = curOrder + 1
+#     curSupport = curOrder
+#     break
+#   }
+# }
+
+### Obsolete code from permuteGraph
+### If pairsOnly = TRUE,  returns a list of nC2 adjacency matrices, one per pair
+permuteGraph = function(Graph, pairsOnly = FALSE) {
+  if (pairsOnly) {
+    Graph %<>% get.adjacency(type = "both", sparse = FALSE)
+    n = nrow(Graph)
+    stopifnot(ncol(Graph) == n)
+    allPairs = combn2(1:n)
+    allPerms = lapply(1:nrow(allPairs), function(x) { cur = allPairs[x,]; Graph[rev(cur),] = Graph[cur,]; Graph[, rev(cur)] = Graph[, cur]; Graph })
+  }
+  allPerms
+}
+
+### This function optimises the number of red edges in a graph, represented by its edge 
+### indices, over the Ramsey polytope on numVertices vertices (so 0 <= curEdges <= nC2)
+solveRamseyLP = function(prep, numVertices, curEdges, lower = TRUE, GLPK = FALSE) {
+  numVars = choose(numVertices, 2)
+  objVec = rep(0, numVars)
+  objVec[curEdges] = 1
+  if (GLPK) {
+    fname = "TempFile.lp"
+    numConst = length(prep$dir)
+    numNonZeros = tail(prep$mat@p,1)
+    model = glpkAPI::initProbGLPK()
+    glpkAPI::setProbNameGLPK(model, "Ramsey Polytope Optimisation")
+    glpkAPI::setObjDirGLPK(model, ifelse(lower, glpkAPI::GLP_MIN, glpkAPI::GLP_MAX))
+    glpkAPI::addColsGLPK(model, ncols = numVars)
+    glpkAPI::setColsBndsObjCoefsGLPK(model, j = seq_len(numVars), lb = rep(0, numVars), ub = rep(1, numVars), obj_coef = objVec, type = rep(glpkAPI::GLP_DB, numVars))
+    glpkAPI::setColKindGLPK(model, j = seq_len(numVars), kind = rep(glpkAPI::GLP_CV, numVars))
+    glpkAPI::addRowsGLPK(model, nrows = numConst)
+    glpkAPI::loadMatrixGLPK(model, ne = numNonZeros, ia = prep$mat@i + 1, ja = rep(1:numVars, diff(prep$mat@p)), ra = rep(1, numNonZeros))
+    rowTypes = ifelse(prep$dir == "G", glpkAPI::GLP_LO, glpkAPI::GLP_UP)
+    glpkAPI::setRowsBndsGLPK(model, i = seq_len(numConst), lb = ifelse(prep$dir == "L", 0, prep$rhs), ub = ifelse(prep$dir == "G", 0, prep$rhs), type = rowTypes)
+    glpkAPI::writeLPGLPK(model, fname = fname)
+    ### CONTINUE FROM HERE TO CALLING CPLEX AND EXTRACTING A SOLUTION (OBJECTIVE + DUAL VARIABLES)
+  }
+  solution
+}
+
+### This function parses the results of an LP optimisation stored in fname;
+### It returns the objective value and the dual vector only at the moment.
+### If removeFile = TRUE, the file gets removed after being processed.
+parseResults = function(fname, removeFile = FALSE) {
+  Lines = readLines(fname) %>%
+    str_trim()
+  objLine = Lines %>%
+    str_detect("objectiveValue") %>%
+    which %>%
+    min
+  objValue = Lines[objLine] %>%
+    str_remove("objectiveValue=") %>%
+    str_remove_all('\"') %>%
+    as.numeric()
+  dualLines = Lines %>%
+    str_detect("<constraint name") %>%
+    which
+  dualPos = Lines[dualLines] %>%
+    str_extract('\"r_[0-9]+\"') %>%
+    str_remove("r_") %>%
+    str_remove_all('\"') %>%
+    as.numeric()
+  stopifnot(all(dualPos == 1:length(dualPos)))
+  dualValues = Lines[dualLines] %>%
+    str_extract('dual=\"[-]?[0-9]+[\\.]?[0-9]*([eE][-]?[0-9]+)?\"') %>%
+    str_remove("dual=") %>%
+    str_remove_all('\"') %>%
+    as.numeric()
+  stopifnot(all(!is.na(dualValues)))
+  if (removeFile) {
+    file.remove(fname)
+  }
+  output = list(obj = objValue, duals = dualValues)
+  output
+}
+
+### Obsolete code from findNextGraph
+curResultL = parseResults(curOutFiles[1])
+curObjL    = curResultL$obj
+boundL     = as.integer(ifelse(near(curObjL, round(curObjL)), round(curObjL), ceiling(curObjL)))
+curDualsL  = curResultL$duals ## curResultL$extra$lambda
+proofL     = NULL
+if (boundL >= 1               && !(all(near(curDualsL[1:numConst], 0)))) {
+  proofL   = constructProof(prep, curDualsL[1:numConst], lower = TRUE, short = short)
+}
+if (symRS) {
+  boundU = curSize - boundL
+  proofU = proofL
+} else {
+  curResultU = parseResults(curOutFiles[2])
+  curObjU    = curResultU$obj
+  boundU     = as.integer(ifelse(near(curObjU, round(curObjU)), round(curObjU), floor(curObjU)))
+  curDualsU  = curResultU$duals ## curResultU$extra$lambda
+  proofU     = NULL
+  if (boundU <= curRow$size - 1 && !(all(near(curDualsU[1:numConst], 0)))) {
+    proofU   = constructProof(prep, curDualsU[1:numConst], lower = FALSE, short = short)
+  }
+}
+
 ### This function finds bounds on the number of red edges in a graph
 ### The Ramsey polytope is constructed over the specified order, numVertices; known bounds are provided via boundTab
 ### The graph will be the first (respectively, all) of the input graphs provided (allGraphs) to yield a non-trivial bound
