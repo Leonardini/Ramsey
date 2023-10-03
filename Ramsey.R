@@ -15,14 +15,18 @@ setwd("/Users/lchindelevitch/Downloads/NonPriority/Conjectures/RamseyNumbers")
 ### This function extracts connected graphs from the files provided by B. McKay
 ### Make sure that the conversion is done with the -el0o1 option in showg_mac64
 ### If extremeOnly = TRUE, only keeps the graphs with sizes within 2 of min.
-getGraphs = function(numVerts = 2, extremeOnly = FALSE, treesOnly = FALSE) {
-  if (!treesOnly) {
+getGraphs = function(numVerts = 2, extremeOnly = FALSE, treesOnly = FALSE, twoTreesOnly = FALSE) {
+  if (!treesOnly && !twoTreesOnly) {
     fn = paste0("Graphs", ifelse(extremeOnly, "Extreme", ""), numVerts, ".RData")
   } else {
-    fn = paste0("Trees", numVerts, ".RData")
+    if (treesOnly) {
+      fn = paste0("Trees", numVerts, ".RData")
+    } else {
+      fn = paste0("TwoTrees", numVerts, ".RData")
+    }
   }
   if (!file.exists(fn)) {
-    curText = readLines(paste0(ifelse(treesOnly, "trees", "graph"), numVerts, ifelse(extremeOnly, "x", "c"), ".txt"))
+    curText = readLines(paste0(ifelse(treesOnly, "trees", ifelse(twoTreesOnly, "TwoTrees", "graph")), numVerts, ifelse(extremeOnly, "x", "c"), ".txt"))
     L = length(curText)
     goodLines = 4 * (1:(L/4))
     numGraphs = L/4
@@ -40,7 +44,7 @@ getGraphs = function(numVerts = 2, extremeOnly = FALSE, treesOnly = FALSE) {
       curNumber = numByEdge[index]
       curCounts = as.integer(names(curText)[index])
       print(paste("Processing the", curNumber, "graphs with", curCounts, "edges"))
-      if (!extremeOnly || (curCounts <= numVerts + 1)) {
+      if (!extremeOnly || (curCounts <= numVerts) || (curCounts >= choose(numVerts, 2) - 1)) {
         curX = curText[[index]] %>%
           str_split("  ") %>%
           unlist() %>%
@@ -68,22 +72,23 @@ getGraphs = function(numVerts = 2, extremeOnly = FALSE, treesOnly = FALSE) {
   allG
 }
 
-findMinimalGraphSet = function(n = 9L, r = 3L, s = 4L, symOnly = FALSE, maxOrder = 6L, minAuto = NULL, extremeOnly = FALSE, symRS = FALSE, shortProofs = TRUE, inds = NULL, 
-                               treesOnly = FALSE) {
+findMinimalGraphSet = function(n = 9L, r = 3L, s = 4L, maxOrder = 6L, symRS = FALSE, shortProofs = TRUE, 
+                               minAuto = NULL, extremeOnly = FALSE, treesOnly = FALSE, twoTreesOnly = FALSE, inds = NULL) {
   lastSolution = NULL
+  inds = sort(setdiff(inds, (1:ifelse(r == s, 1, 2))))
   L = length(inds)
   print(paste("There are", L, "indices to process"))
   pos = L
   while (pos >= 1) {
     print(pos)
     altInds = inds[-pos]
-    altRes  = iterateLPProof(n = n, r = r, s = s, symOnly = symOnly, maxOrder = maxOrder, minAuto = minAuto, extremeOnly = extremeOnly, symRS = symRS, shortProofs = shortProofs,
-                             inds = altInds, treesOnly = treesOnly)
+    altRes  = iterateLPProof(n = n, r = r, s = s, maxOrder = maxOrder, symRS = symRS, shortProofs = shortProofs,
+                             minAuto = minAuto, extremeOnly = extremeOnly, treesOnly = treesOnly, twoTreesOnly = twoTreesOnly, inds = altInds)
     if (length(altRes) > 1) {
       print(paste("Removing", inds[pos], "leaves the contradiction valid"))
       lastSolution = altRes
       bestSolution = prepareBestProof(altRes[[4]], altRes[[3]], labels = c(LETTERS, letters), plotGraphs = FALSE)
-      inds = setdiff(altInds[sort(unique(bestSolution$graph))], (1:(1 + (r != s))))
+      inds = altInds[sort(unique(setdiff(bestSolution$graph, (1:ifelse(r == s, 1, 2)))))]
       pos = length(inds)
     } else {
       pos = pos - 1
@@ -94,45 +99,48 @@ findMinimalGraphSet = function(n = 9L, r = 3L, s = 4L, symOnly = FALSE, maxOrder
 }
 
 ### This function tries to iteratively construct a proof that Ramsey(r,s) <= n.
+### Search parameters (apply to the LPs and the corresponding proofs):
 ### maxOrder determines the largest order of the graphs that will be considered.
-### If minAuto is not NULL, it is a lower bound on the automorphism group size.
-### If extremeOnly = TRUE, only keeps the graphs with sizes within 2 of minimum.
-### If treesOnly = TRUE, only keeps the graphs with size equal to the order - 1.
-### If symOnly = TRUE, only keeps those with a smaller than average orbit (per order).
 ### If symRS = TRUE, only lower bounds are computed, the upper bounds being symmetric.
 ### If shortProofs = TRUE, only produces the shortened (not full) version of proofs.
-### If inds is not NULL, only keeps non-essential graphs whose numbers are in inds. 
-iterateLPProof = function(n = 6L, r = 3L, s = r, symOnly = FALSE, maxOrder = 2 * n / 3, minAuto = NULL, extremeOnly = FALSE, symRS = (r == s), shortProofs = TRUE, 
-                          inds = NULL, treesOnly = FALSE) {
+### Graph selection parameters (Kr and Ks are considered essential and put 1st/2nd):
+### If minAuto is not NULL, it is a lower bound on the automorphism group size.
+### If extremeOnly = TRUE, only keeps the graphs with sizes within 1 of min/max.
+### If treesOnly = TRUE, only keeps the graphs with size equal to the order - 1.
+### If twoTreesOnly = TRUE, only keeps the graphs with size equal to the 2 * order - 3.
+### If inds is not NULL, only keeps the non-essential graphs whose numbers are in inds.
+iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = 2 * n / 3, symRS = (r == s), shortProofs = TRUE,
+                          minAuto = NULL, extremeOnly = FALSE, treesOnly = FALSE, twoTreesOnly = FALSE, inds = NULL) {
   allGraphs = list(as.vector(combn2(1:r)))
   if (r !=s ) {
     allGraphs %<>% c(list(as.vector(combn2(1:s))))
   }
   for (gsize in 2:maxOrder) {
-    allGraphs %<>% c(getGraphs(gsize, extremeOnly = extremeOnly, treesOnly = treesOnly))
+    allGraphs %<>% c(getGraphs(gsize, extremeOnly = extremeOnly, treesOnly = treesOnly, twoTreesOnly = twoTreesOnly))
   }
   numAutos    = sapply(allGraphs, function(x) { as.integer(automorphisms(graph_from_edgelist(matrix(x, ncol = 2), directed = FALSE))$group_size) })
   graphTab    = tibble(size = sapply(allGraphs, length)/2, order = sapply(allGraphs, max), n_auto = numAutos, orbit = factorial(order)/n_auto)
-  goodGraphs  = (graphTab$order <= maxOrder)
-  if (extremeOnly) { goodGraphs = (goodGraphs & (graphTab$size <= graphTab$order + 1)) }
-  ### goodGraphs = (goodGraphs & (graphTab$size <= graphTab$order) | graphTab$size >= (choose(graphTab$order, 2) - 1))
-  if (!is.null(minAuto)) { goodGraphs = (goodGraphs & (graphTab$n_auto >= minAuto)) }
-  goodGraphs = which(goodGraphs)
-  if (!is.null(inds)) { goodGraphs = goodGraphs[inds] }
-  if (!(goodGraphs[1] == 1)) { goodGraphs = c(1, goodGraphs) }
-  if (r !=s && !(goodGraphs[2] == 2)) { goodGraphs = c(1, 2, goodGraphs[-1]) }
-  allGraphs %<>% magrittr::extract(goodGraphs)
-  graphTab  %<>% slice(goodGraphs) %>%
-    mutate(index = 1:length(allGraphs), .before = 1)
   repeatGraphs = graphTab %>%
-    filter(order %in% c(r, s) & size == choose(order,2) & index > ifelse(r == s, 1, 2)) %>%
+    rowid_to_column(var = "index") %>%
+    filter(order %in% c(r, s) & size == choose(order, 2) & index > ifelse(r == s, 1, 2)) %>%
     pull(index)
   if (length(repeatGraphs) > 0) {
-    allGraphs = allGraphs[-repeatGraphs]
-    graphTab = graphTab %>%
-      slice(-repeatGraphs) %>%
-      mutate(index = 1:length(allGraphs), .before = 1)
+    allGraphs %<>% magrittr::extract(-repeatGraphs)
+    graphTab  %<>% slice(-repeatGraphs)
   }
+  goodGraphs   = (graphTab$order <= maxOrder)
+  if (extremeOnly) { 
+    goodGraphs = (goodGraphs & (graphTab$size <= graphTab$order) | graphTab$size >= (choose(graphTab$order, 2) - 1)) 
+  }
+  goodGraphs   = (goodGraphs & (graphTab$n_auto >= ifelse(is.null(minAuto), 1, minAuto))) 
+  goodGraphs   = sort(unique(c(1:ifelse(r == s, 1, 2), which(goodGraphs))))
+  if (!is.null(inds)) {
+    sort(unique(c(1:ifelse(r == s, 1, 2), inds)))
+    goodGraphs %<>% magrittr::extract(inds)
+  }
+  allGraphs %<>% magrittr::extract(goodGraphs)
+  graphTab  %<>% slice(goodGraphs) %>%
+    rowid_to_column(var = "index")
   numGraphs = length(goodGraphs)
   allGraphAdj = vector("list", numGraphs)
   boundTab = tibble(number = 1:2, support = c(r, s), graph = c(1, ifelse(r == s, 1, 2)), direction = c("G", "L"), bound = c(1, choose(s, 2) - 1), round = 0L, subsumed = FALSE)
@@ -151,7 +159,7 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, symOnly = FALSE, maxOrder = 2 *
     boundTab    = bind_rows(lowerBounds, upperBounds)
     curRound    = curRound + 1
     finalResult  = findNextGraph(numVertices = curSupport, allGraphs = allGraphs, allGraphAdj = allGraphAdj, boundTab = boundTab, 
-                                 graphInfo = curGraphTab, nRound = curRound, symRS = symRS, short = shortProofs)
+                                 graphInfo = curGraphTab, nRound = paste0("R", r, "S", s, "I", curRound), symRS = symRS, short = shortProofs)
     fullResult  = finalResult[[1]]
     allGraphAdj = finalResult[[2]]
     contradict = FALSE
@@ -218,7 +226,7 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, symOnly = FALSE, maxOrder = 2 *
 findNextGraph = function(numVertices, allGraphs, allGraphAdj, boundTab, graphInfo, nRound = 0, symRS = FALSE, short = TRUE) {
   L = nrow(graphInfo)
   prep = prepareRamseyLP(numVertices = numVertices, allGraphs = allGraphs, allGraphAdj = allGraphAdj, graphBounds = boundTab, graphInfo = graphInfo, sparse = TRUE)
-  fname    = paste0("TempFileRound", nRound, ".lp")
+  fname    = paste0("TempFile", nRound, ".lp")
   numVars  = ncol(prep$mat)
   numConst = length(prep$dir)
   numNonZeros = tail(prep$mat@p,1)
@@ -238,7 +246,7 @@ findNextGraph = function(numVertices, allGraphs, allGraphAdj, boundTab, graphInf
   auxMatrix   = createPositionMatrix(numVertices)
   print(paste("There are", L, "graphs to process"))
   fname   = normalizePath(fname) 
-  outputFiles  = paste0("SolutionR", nRound, "G", outer(c("Lower", "Upper"), 1:L, function(x,y) {paste0(y,x)}), ".sol")
+  outputFiles  = paste0("Solution", nRound, "G", outer(c("Lower", "Upper"), 1:L, function(x,y) {paste0(y,x)}), ".sol")
   startLine    = 'source ~/.bash_profile; ./cplex -c'
   settingLines = c(paste('re', fname), paste('set', 'prep', 'pres', 'n', collapse = ' '), paste('set', 'lpm', 2, collapse = ' '))
   finalLine    = 'qu'
