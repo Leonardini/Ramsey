@@ -169,6 +169,17 @@ parseResults = function(fname, removeFile = FALSE) {
 }
 
 ### Obsolete code from findNextGraph
+model = glpkAPI::initProbGLPK()
+glpkAPI::setProbNameGLPK(model, "Ramsey Polytope Optimisation")
+glpkAPI::addColsGLPK(model, ncols = numVars)
+glpkAPI::setColsBndsGLPK(model, j = seq_len(numVars), lb = rep(0, numVars), ub = rep(1, numVars), type = rep(glpkAPI::GLP_DB, numVars))
+glpkAPI::setColKindGLPK(model, j = seq_len(numVars), kind = rep(glpkAPI::GLP_CV, numVars))
+glpkAPI::addRowsGLPK(model, nrows = numConst)
+glpkAPI::loadMatrixGLPK(model, ne = numNonZeros, ia = prep$mat@i + 1, ja = rep(1:numVars, diff(prep$mat@p)), ra = rep(1, numNonZeros))
+rowTypes = ifelse(prep$dir == "G", glpkAPI::GLP_LO, glpkAPI::GLP_UP)
+glpkAPI::setRowsBndsGLPK(model, i = seq_len(numConst), lb = ifelse(prep$dir == "L", 0, prep$rhs), ub = ifelse(prep$dir == "G", 0, prep$rhs), type = rowTypes)
+glpkAPI::writeLPGLPK(model, fname = fname)
+### Parsing section
 curResultL = parseResults(curOutFiles[1])
 curObjL    = curResultL$obj
 boundL     = as.integer(ifelse(near(curObjL, round(curObjL)), round(curObjL), ceiling(curObjL)))
@@ -478,6 +489,24 @@ if (checkProofs) {
   }
 }
 
+### Obsolete functionality used to construct LPs via GLPK
+outputFiles  = paste0("Solution", nRound, "G", outer(c("Lower", "Upper"), 1:L, function(x,y) {paste0(y,x)}), ".sol")
+startLine    = 'source ~/.bash_profile; ./cplex -c'
+settingLines = c(paste('re', fname), paste('set', 'prep', 'pres', 'n', collapse = ' '), paste('set', 'lpm', 2, collapse = ' '))
+finalLine    = 'qu'
+initDir = getwd()
+setwd(CPLEX_DIR)
+if (!file.exists(curOutFiles[1])) {
+  changeLines  = rep("", curSize + ifelse(symRS, 2, 5))
+  for (pos in 1:curSize) {
+    changeLines[pos] = paste('ch', 'ob', paste0('X', curEdges[pos]), 1, collapse = ' ')
+  }
+  changeLines[curSize + (1:2)] = c('op', paste('wr', curOutFiles[1]))
+  ## if (!symRS) {
+  changeLines[curSize + (3:5)] = c(paste('ch', 'se', '0', 'max', collapse = ' '), 'op', paste('wr', curOutFiles[2]))
+  ## }
+  fullCommand  = system(paste(startLine, paste(map_chr(c(settingLines, changeLines, finalLine), ~{paste('"', ., '"', collapse = "")}), collapse = " ")))
+}
 
 ### This function computes the best (lower if lower = TRUE, upper otherwise) bound 
 ### for the sum of N [0,1] variables from given coefficient vector and constant value
@@ -568,50 +597,28 @@ processInputFiles = function(modelFile = "RamseyModel", dataFile = "RamseyData",
   output
 }
 
-### obsolete parts of the code dealing with the upper bounds
-if (!is.null(curProofU)) {
-  proofSumU  = colSums(curProofU * curProofU[,1])[-1]
-  proofSumU[near(proofSumU, 0)] = Inf
-  proofMinU  = min(proofSumU[curEdges])
-  proofUpper = floor(proofSumU["rhs"]/proofMinU)
-  stopifnot(near(proofUpper, upperBound))
+### This obsolete function parses the optimal value of an LP optimisation stored in fname
+parseObjective = function(fname) {
+  myResult = system(paste('head', '-5', fname, collapse = ' '), intern = TRUE)
+  objValue = myResult[5] %>%
+    str_remove("objectiveValue=") %>%
+    str_remove_all('\"') %>%
+    as.numeric()
+  objValue
 }
 
-curResultL = curResults$lower
-curResultU = curResults$upper
-curObjL = curResultL$objval
-curObjU = curResultU$objval
-proofL = NULL
-proofU = NULL
-boundL = ifelse(near(curObjL, round(curObjL)), as.integer(round(curObjL)), as.integer(ceiling(curObjL)))
-boundU = ifelse(near(curObjU, round(curObjU)), as.integer(round(curObjU)), as.integer(floor  (curObjU)))
-if (boundL >= 1        && sum(!near(curResultL$duals[1:numConst], 0)) > 1) { ### ignore results due to subgraphs
-  print(paste("Found a lower bound of", boundL, "at index", ind))
-  proofL = constructProof(prep$mat, prep$dir, prep$rhs, curResultL$duals, lower = TRUE)
-} else {
-  boundL = -Inf
+### This obsolete function parses the dual values of an LP optimisation stored in fname
+parseDuals = function(fname) {
+  Lines = readLines(fname) %>%
+    str_trim()
+  dualLines = Lines %>%
+    str_detect("^<constraint name") %>%
+    which
+  dualValues = Lines[dualLines] %>%
+    str_extract('dual=\"[-]?[0-9]+[\\.]?[0-9]*([eE][-]?[0-9]+)?\"') %>%
+    str_remove("dual=") %>%
+    str_remove_all('\"') %>%
+    as.numeric()
+  stopifnot(all(!is.na(dualValues)))
+  dualValues
 }
-if (boundU <= curM - 1 && sum(!near(curResultU$duals[1:numConst], 0)) > 1) { ### ignore results due to subgraphs
-  print(paste("Found an upper bound of", boundU, "at index", ind))
-  proofU = constructProof(prep$mat, prep$dir, prep$rhs, curResultU$duals, lower = FALSE)
-} else {
-  boundU = Inf
-}
-if (!is.null(proofL) || !is.null(proofU)) {
-  curResult = list(ind = ind, graph = curGraph, proofU = proofU, proofL = proofL, boundU = boundU, boundL = boundL)
-  if (stopAfterOne) {
-    output = list(curResult)
-    break
-  } else {
-    output = c(output, list(curResult))
-  }
-}
-
-keepRows = which(is.finite(Rhs))
-Mat = Mat[keepRows, , drop = TRUE]
-Dir = Dir[keepRows]
-Rhs = Rhs[keepRows]
-
-SolU = lp("max", objective.in = objVec, const.mat = Mat, const.dir = Dir, const.rhs = Rhs, compute.sens = TRUE)
-output = list(lower = SolL, upper = SolU)
-output

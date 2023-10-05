@@ -1,6 +1,6 @@
 library(combinat)
 library(igraph)
-library(Rcplex)
+library(cplexAPI)
 library(magrittr)
 library(Matrix)
 library(slam)
@@ -135,7 +135,7 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = 2 * n / 3, symRS = (
   goodGraphs   = (goodGraphs & (graphTab$n_auto >= ifelse(is.null(minAuto), 1, minAuto))) 
   goodGraphs   = sort(unique(c(1:ifelse(r == s, 1, 2), which(goodGraphs))))
   if (!is.null(inds)) {
-    sort(unique(c(1:ifelse(r == s, 1, 2), inds)))
+    inds = sort(unique(c(1:ifelse(r == s, 1, 2), inds)))
     goodGraphs %<>% magrittr::extract(inds)
   }
   allGraphs %<>% magrittr::extract(goodGraphs)
@@ -143,23 +143,22 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = 2 * n / 3, symRS = (
     rowid_to_column(var = "index")
   numGraphs = length(goodGraphs)
   allGraphAdj = vector("list", numGraphs)
-  boundTab = tibble(number = 1:2, support = c(r, s), graph = c(1, ifelse(r == s, 1, 2)), direction = c("G", "L"), bound = c(1, choose(s, 2) - 1), round = 0L, subsumed = FALSE)
+  boundTab = tibble(number = 1:2, support = c(r, s), graph = c(1, ifelse(r == s, 1, 2)), direction = c("G", "L"), bound = c(1, choose(s, 2) - 1), round = 0L, subsumed = FALSE, size = choose(c(r, s), 2))
   boundIndex = 3
   proofs     = vector("list", n^2)
   curSupport = min(r, s) + 1
-  curOrder   = min(r, s) + 1
+  curOrder   = curSupport
   curRound   = 0
   while (curOrder <= maxOrder) {
     curGraphTab = graphTab %>% 
       filter(order >= min(r, s) & order <= curOrder)
-    print(paste("Currently looking at graphs with", curOrder, "vertices"))
     print(paste("Exploring graphs on up to", curOrder, "vertices with support size", curSupport))
     lowerBounds = identifySubsumedBounds(allGraphs, boundTab, curGraphTab, lower = TRUE)
     upperBounds = identifySubsumedBounds(allGraphs, boundTab, curGraphTab, lower = FALSE)
     boundTab    = bind_rows(lowerBounds, upperBounds)
     curRound    = curRound + 1
     finalResult  = findNextGraph(numVertices = curSupport, allGraphs = allGraphs, allGraphAdj = allGraphAdj, boundTab = boundTab, 
-                                 graphInfo = curGraphTab, nRound = paste0("R", r, "S", s, "I", curRound), symRS = symRS, short = shortProofs)
+                                 graphInfo = curGraphTab, nRound = paste0("R", r, "S", s, "I", curRound), symRS = symRS, shortProofs = shortProofs)
     fullResult  = finalResult[[1]]
     allGraphAdj = finalResult[[2]]
     contradict = FALSE
@@ -170,19 +169,22 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = 2 * n / 3, symRS = (
       for (ind in 1:length(fullResult)) {
         curResult = fullResult[[ind]]
         curGraph  = curResult$graph
+        curSize = curGraphTab %>% 
+          filter(index == curGraph) %>% 
+          pull(size)
         if (!is.null(curResult$proofL)) {
           proofs[[boundIndex]] = curResult$proofL
           boundTab %<>% 
-            bind_rows(tibble(number = boundIndex, support = curSupport, graph = curGraph, direction = "G", bound = curResult$boundL, round = curRound, subsumed = FALSE))
+            bind_rows(tibble(number = boundIndex, support = curSupport, graph = curGraph, direction = "G", bound = curResult$boundL, round = curRound, subsumed = FALSE, size = curSize))
           boundIndex = boundIndex + 1
         }
         if (!is.null(curResult$proofU)) {
           proofs[[boundIndex]] = curResult$proofU
           boundTab %<>% 
-            bind_rows(tibble(number = boundIndex, support = curSupport, graph = curGraph, direction = "L", bound = curResult$boundU, round = curRound, subsumed = FALSE))
+            bind_rows(tibble(number = boundIndex, support = curSupport, graph = curGraph, direction = "L", bound = curResult$boundU, round = curRound, subsumed = FALSE, size = curSize))
           boundIndex = boundIndex + 1
         }
-        contradict = (contradict || (curResult$boundL > curResult$boundU))
+        contradict = (contradict || (curResult$boundL > curResult$boundU) || (curResult$boundL == curSize) || (curResult$boundU == 0))
       }
     } else {
       curSupport = curSupport + 1
@@ -222,85 +224,71 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = 2 * n / 3, symRS = (
 ### The output will contain information on all of the input graphs provided (allGraphs) that yield a non-trivial bound
 ### The allGraphAdj variable contains all the distinct permuted versions of each graph's adjacency list in the same order
 ### that also contain relevant information in graphInfo (in particular, whose indices are contained in its first column).
-### TODO: Replace the variable names with Excel-style symbol combinations in order to always keep them within 2 characters
-findNextGraph = function(numVertices, allGraphs, allGraphAdj, boundTab, graphInfo, nRound = 0, symRS = FALSE, short = TRUE) {
+findNextGraph = function(numVertices, allGraphs, allGraphAdj, boundTab, graphInfo, nRound = 0, symRS = FALSE, shortProofs = TRUE) {
   L = nrow(graphInfo)
   prep = prepareRamseyLP(numVertices = numVertices, allGraphs = allGraphs, allGraphAdj = allGraphAdj, graphBounds = boundTab, graphInfo = graphInfo, sparse = TRUE)
   fname    = paste0("TempFile", nRound, ".lp")
   numVars  = ncol(prep$mat)
   numConst = length(prep$dir)
   numNonZeros = tail(prep$mat@p,1)
-  ### Writing the model (with no objective function!) into an LP file with GLPK
-  model = glpkAPI::initProbGLPK()
-  glpkAPI::setProbNameGLPK(model, "Ramsey Polytope Optimisation")
-  glpkAPI::addColsGLPK(model, ncols = numVars)
-  glpkAPI::setColsBndsGLPK(model, j = seq_len(numVars), lb = rep(0, numVars), ub = rep(1, numVars), type = rep(glpkAPI::GLP_DB, numVars))
-  glpkAPI::setColKindGLPK(model, j = seq_len(numVars), kind = rep(glpkAPI::GLP_CV, numVars))
-  glpkAPI::addRowsGLPK(model, nrows = numConst)
-  glpkAPI::loadMatrixGLPK(model, ne = numNonZeros, ia = prep$mat@i + 1, ja = rep(1:numVars, diff(prep$mat@p)), ra = rep(1, numNonZeros))
-  rowTypes = ifelse(prep$dir == "G", glpkAPI::GLP_LO, glpkAPI::GLP_UP)
-  glpkAPI::setRowsBndsGLPK(model, i = seq_len(numConst), lb = ifelse(prep$dir == "L", 0, prep$rhs), ub = ifelse(prep$dir == "G", 0, prep$rhs), type = rowTypes)
-  glpkAPI::writeLPGLPK(model, fname = fname)
+  CN = paste0("X", 1:numVars)
+  ### Writing the model (with no objective function!) into an LP file with cplexAPI
+  envir = cplexAPI::openEnvCPLEX()
+  model = cplexAPI::initProbCPLEX(envir, pname = "Ramsey Polytope Optimisation")
+  cplexAPI::copyLpwNamesCPLEX(env = envir, lp = model, nCols = numVars, nRows = numConst, lpdir = CPX_MIN, objf = rep(0, numVars), rhs = prep$rhs, sense = prep$dir, 
+  matbeg = prep$mat@p[1:numVars], matcnt = diff(prep$mat@p), matind = prep$mat@i, matval = rep(1, numNonZeros), lb = rep(0, numVars), ub = rep(1, numVars), cnames = CN)
+  cplexAPI::writeProbCPLEX(envir, model, fname = fname)
   print(paste("There are", numConst, "constraints over", numVars, "variables"))
   output      = vector("list", L)
   auxMatrix   = createPositionMatrix(numVertices)
   print(paste("There are", L, "graphs to process"))
-  fname   = normalizePath(fname) 
-  outputFiles  = paste0("Solution", nRound, "G", outer(c("Lower", "Upper"), 1:L, function(x,y) {paste0(y,x)}), ".sol")
-  startLine    = 'source ~/.bash_profile; ./cplex -c'
-  settingLines = c(paste('re', fname), paste('set', 'prep', 'pres', 'n', collapse = ' '), paste('set', 'lpm', 2, collapse = ' '))
-  finalLine    = 'qu'
-  initDir = getwd()
-  setwd(CPLEX_DIR)
+  initObjective = rep(0, numVars)
   for (ind in 1:L) {
-    if (ind %% 100 == 0) { print(ind) }
-    curOutFiles = outputFiles[ind * 2 - (1:0)]
+    print(ind)
+    # curOutFiles = outputFiles[ind * 2 - (1:0)]
     curRow     = graphInfo %>% slice(ind)
     curIndex   = curRow$index
     curGraph   = allGraphs[[curIndex]]
     curSize    = length(curGraph)/2
-    if (!file.exists(curOutFiles[1])) {
-      curEdges   = auxMatrix[matrix(curGraph, ncol = 2)]
-      changeLines  = rep("", curSize + ifelse(symRS, 2, 5))
-      for (pos in 1:curSize) {
-        changeLines[pos] = paste('ch', 'ob', paste0('x_', curEdges[pos]), 1, collapse = ' ')
-      }
-      changeLines[curSize + (1:2)] = c('op', paste('wr', curOutFiles[1]))
-      if (!symRS) {
-        changeLines[curSize + (3:5)] = c(paste('ch', 'se', '0', 'max', collapse = ' '), 'op', paste('wr', curOutFiles[2]))
-      }
-      fullCommand  = system(paste(startLine, paste(map_chr(c(settingLines, changeLines, finalLine), ~{paste('"', ., '"', collapse = "")}), collapse = " ")))
-    }
-    curObjL = parseObjective(curOutFiles[1])
+    curEdges   = auxMatrix[matrix(curGraph, ncol = 2)]
+    curObjective = initObjective
+    curObjective[curEdges] = 1
+    cplexAPI::setIntParmCPLEX(envir, cplexAPI::CPXPARAM_Preprocessing_Presolve, 0)
+    cplexAPI::chgObjCPLEX(envir, model, ncols = numVars, ind = 0:(numVars - 1), val = curObjective)
+    cplexAPI::dualoptCPLEX(envir, model)
+    curSolution = cplexAPI::solutionCPLEX(envir, model)
+    curObjL = curSolution$objval
     boundL  = as.integer(ifelse(near(curObjL, round(curObjL)), round(curObjL), ceiling(curObjL)))
     proofL  = NULL
     prevLowerBound = boundTab %>% 
       filter(graph == curIndex & direction == "G") %>% 
       pull(bound)
     if (boundL > max(c(0, prevLowerBound))) {
-      curDualsL  = parseDuals(curOutFiles[1])
+      curDualsL  = curSolution$pi
       if (!(all(near(curDualsL[1:numConst], 0)))) {
-        proofL   = constructProof(prep, curDualsL[1:numConst], lower = TRUE, short = short)
+        proofL   = constructProof(prep, curDualsL[1:numConst], lower = TRUE, shortProofs = shortProofs)
       }
     }
-    file.remove(curOutFiles[1])
     if (symRS) {
       boundU = curSize - boundL
       proofU = proofL
     } else {
-      curObjU = parseObjective(curOutFiles[2])
+      cplexAPI::setObjDirCPLEX(envir, model, CPX_MAX)
+      cplexAPI::dualoptCPLEX(envir, model)
+      altSolution = cplexAPI::solutionCPLEX(envir, model)
+      curObjU = altSolution$objval
       boundU  = as.integer(ifelse(near(curObjU, round(curObjU)), round(curObjU), floor(curObjU)))
       proofU  = NULL
       prevUpperBound = boundTab %>% 
         filter(graph == curIndex & direction == "L") %>% 
         pull(bound)
       if (boundU < min(c(curSize, prevUpperBound))) {
-        curDualsU  = parseDuals(curOutFiles[2])
+        curDualsU  = altSolution$pi
         if (!(all(near(curDualsU[1:numConst], 0)))) {
-          proofU   = constructProof(prep, curDualsU[1:numConst], lower = FALSE, short = short)
+          proofU   = constructProof(prep, curDualsU[1:numConst], lower = FALSE, shortProofs = shortProofs)
         }
       }
-      file.remove(curOutFiles[2])
+      cplexAPI::setObjDirCPLEX(envir, model, CPX_MIN)
     }
     curResult = NULL
     if (!is.null(proofL) || !is.null(proofU)) {
@@ -308,7 +296,8 @@ findNextGraph = function(numVertices, allGraphs, allGraphAdj, boundTab, graphInf
     }
     output[[ind]] = curResult
   }
-  setwd(initDir)
+  cplexAPI::delProbCPLEX(envir, model)
+  cplexAPI::closeEnvCPLEX(envir)
   finalOutput = list(output = output, adj = prep$adj)
   finalOutput
 }
@@ -319,12 +308,13 @@ prepareRamseyLP = function(numVertices, allGraphs, allGraphAdj, graphBounds, gra
   auxMatrix = createPositionMatrix(numVertices = numVertices)
   graphBounds %<>%
     filter(!subsumed) %>%
-    inner_join(graphInfo, by = join_by(graph == index)) %>%
+    inner_join(graphInfo, by = join_by(graph == index, size == size)) %>%
     arrange(graph, direction) %>%
     mutate(numOpts = choose(numVertices, order), numCombinations = orbit * numOpts, fullCombinations = numCombinations * size)
   numConstraints = sum(graphBounds$numCombinations)
   Dir = rep("", numConstraints)
   Rhs = rep(0,  numConstraints)
+  Szs = rep(0, numConstraints)
   Map = matrix(0,  numConstraints, 3)
   Mat = matrix(0, ifelse(sparse, sum(graphBounds$fullCombinations), numConstraints), ifelse(sparse, 2, numVars))
   pos = 0
@@ -352,6 +342,7 @@ prepareRamseyLP = function(numVertices, allGraphs, allGraphAdj, graphBounds, gra
     curNFull  = curLength * curCombos
     Rhs[pos + (1:curNFull)]   = rep(curInfo$bound,        curCombos)
     Dir[pos + (1:curNFull)]   = rep(curInfo$direction,    curCombos)
+    Szs[pos + (1:curNFull)]   = rep(curSize,              curCombos)
     miniIndices = rep(1:curNOpts, each = curLength)
     Map[pos + (1:curNFull), ] = cbind(rep(curInfo$number, curCombos), rep(1:curNOrbit, each = curNConst), rep(miniIndices, curNOrbit))
     curOpts   = combn(1:numVertices, curInfo$order[1])
@@ -378,7 +369,7 @@ prepareRamseyLP = function(numVertices, allGraphs, allGraphAdj, graphBounds, gra
   if (sparse) {
     Mat = sparseMatrix(i = Mat[, 1], j = Mat[, 2], x = 1, dims = c(numConstraints, numVars), index1 = TRUE)
   }
-  output = list(mat = Mat, dir = Dir, rhs = Rhs, map = Map, adj = allGraphAdj)
+  output = list(mat = Mat, dir = Dir, rhs = Rhs, szs = Szs, map = Map, adj = allGraphAdj)
   output
 }
 
@@ -409,7 +400,7 @@ identifySubsumedBounds = function(allGraphs, boundTab, graphInfo, lower = TRUE) 
     return(output)
   }
   fullTab = boundTab %>%
-    inner_join(graphInfo, by = join_by(graph == index)) %>%
+    inner_join(graphInfo, by = join_by(graph == index, size == size)) %>%
     arrange(order, size) %>%
     mutate_at("bound", as.integer)
   print(paste("There are", L, ifelse(lower, "lower", "upper"), "bounds to process"))
@@ -432,7 +423,7 @@ identifySubsumedBounds = function(allGraphs, boundTab, graphInfo, lower = TRUE) 
     subsumedBySub   = sapply(allGraphs[  subsumedSubCandidates$graph], function(x) { subgraph_isomorphic(graph_from_edgelist(matrix(x, ncol = 2), directed = FALSE), curGraph) })
     fullTab$subsumed[index] = (any(subsumedBySuper) || any(subsumedBySub))
   }
-  fullTab %<>% select(number, support, graph, direction, bound, round, subsumed)
+  fullTab %<>% select(number, support, graph, direction, bound, round, subsumed, size)
   output = bind_rows(preSubsumed, fullTab)
   output
 }
@@ -440,13 +431,13 @@ identifySubsumedBounds = function(allGraphs, boundTab, graphInfo, lower = TRUE) 
 ### This function constructs the proof of a lower bound over the Ramsey polytope
 ### It makes use of the original LP as well as its dual variables at optimality
 ### If lower = FALSE the funciton constructs the proof of an upper bound instead
-### If short = TRUE, only constructs a short proof version (with bound pointers)
-constructProof = function(LP, dualVariables, lower = TRUE, short = FALSE) {
+### If shortProofs = TRUE, only constructs a short proof version (with bound pointers)
+constructProof = function(LP, dualVariables, lower = TRUE, shortProofs = FALSE) {
   goodRows   = which(!near(dualVariables, 0))
   dualValues = dualVariables[goodRows]
   dualValues = dualValues/min(abs(dualValues))
   dir        = LP$dir[goodRows]
-  if (short) {
+  if (shortProofs) {
     relInfo   = LP$map[goodRows, , drop = FALSE]
     proof     = tibble(coeff = dualValues, constr = goodRows, dir = dir, bound = relInfo[,1], version = relInfo[,2], combo = relInfo[,3])
   } else {
@@ -519,16 +510,30 @@ reconstructContradictions = function(allProofs, boundTab) {
     filter(iter == lastIter) %>%
     group_by(graph) %>%
     mutate(N = n()) %>%
-    filter(N == 2) %>%
-    mutate(lower = max(bound * (direction == "G")), upper = max(bound * (direction == "L"))) %>%
-    filter(upper < lower) %>%
-    select(-N, -lower, -upper) %>%
-    ungroup
-  numContradictions = nrow(lastProofs)/2
+    filter(N == 2)
+  if (nrow(lastProofs) > 0) {
+    lastProofs %<>%
+      mutate(lower = max(bound * (direction == "G")), upper = max(bound * (direction == "L"))) %>%
+      filter(upper < lower) %>%
+      select(-N, -lower, -upper) %>%
+      ungroup
+  } else {
+    lastProofs %<>% 
+      select(-N) %>%
+      ungroup()
+  }
+  extraProofs = boundTab %>%
+    filter(iter == lastIter) %>%
+    filter((direction == "G" & bound == size) | (direction == "L" & bound == 0))
+  lastProofs %<>%
+    bind_rows(extraProofs)
+  uGraphs = sort(unique(lastProofs$graph))
+  numContradictions = length(uGraphs)
   allContradictions = vector("list", numContradictions)
   for (index in 1:numContradictions) {
+    curGraph = uGraphs[index]
     curLastProof = lastProofs %>%
-      slice(2 * (index - 1) + (1:2))
+      filter(graph == curGraph)
     curIndices = curLastProof$number
     allIndices = curIndices
     contradiction = vector("list", lastIter)
@@ -586,7 +591,7 @@ prepareBestProof = function(contradictions, listOfGraphs, labels = LETTERS, spec
     bind_rows(tibble(index = firstGraphs, label = specialLabels)) %>%
     arrange(index)
   bestContradiction %<>%
-    inner_join(nameTab, by = c("graph" = "index"))
+    inner_join(nameTab, by = join_by(graph == index))
   miniContradiction = bestContradiction %>%
     filter(step > 1) %>%
     mutate(summary = paste0("X[", label, "] \\", tolower(direction), "eq ", bound)) %>%
@@ -611,32 +616,8 @@ prepareBestProof = function(contradictions, listOfGraphs, labels = LETTERS, spec
   bestContradiction
 }
 
-### This function parses the optimal value of an LP optimisation stored in fname
-parseObjective = function(fname) {
-  myResult = system(paste('head', '-5', fname, collapse = ' '), intern = TRUE)
-  objValue = myResult[5] %>%
-    str_remove("objectiveValue=") %>%
-    str_remove_all('\"') %>%
-    as.numeric()
-  objValue
-}
-
-### This function parses the dual values of an LP optimisation stored in fname
-parseDuals = function(fname) {
-  Lines = readLines(fname) %>%
-    str_trim()
-  dualLines = Lines %>%
-    str_detect("^<constraint name") %>%
-    which
-  dualValues = Lines[dualLines] %>%
-    str_extract('dual=\"[-]?[0-9]+[\\.]?[0-9]*([eE][-]?[0-9]+)?\"') %>%
-    str_remove("dual=") %>%
-    str_remove_all('\"') %>%
-    as.numeric()
-  stopifnot(all(!is.na(dualValues)))
-  dualValues
-}
-
+### This function parses a written proof in LaTeX format, providing the totals. 
+### Note: replace all \ with \\ in the LaTeX source before passing it as input!
 parseProof = function(String, N = 9) {
   String %<>%
     str_remove_all("\\{") %>%
