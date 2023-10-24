@@ -75,23 +75,23 @@ if (symOnly) {
 }
 
 ### Obsolete code from iterateLPProof
-# allGraphs = getSmallGraphs(symOnly = symOnly, extremeOnly = extremeOnly)
-# if (maxOrder > MAX_ATLAS_SIZE) {
-#   for (medSize in (MAX_ATLAS_SIZE + 1):maxOrder) {
-#     allGraphs %<>% c(getMediumGraphs(medSize, extremeOnly = extremeOnly))
-#   }
-# }
-# 
-# graphTab    = tibble(size = sapply(allGraphs, gsize), order = sapply(allGraphs, gorder), n_auto = as.integer(sapply(allGraphs, automorphisms)["group_size",]))
-# 
-# else {
-#   curSupport   = curSupport + 1
-#   if (curSupport >= curOrder + 3 && curOrder < maxOrder) {
-#     curOrder   = curOrder + 1
-#     curSupport = curOrder
-#     break
-#   }
-# }
+allGraphs = getSmallGraphs(symOnly = symOnly, extremeOnly = extremeOnly)
+if (maxOrder > MAX_ATLAS_SIZE) {
+  for (medSize in (MAX_ATLAS_SIZE + 1):maxOrder) {
+    allGraphs %<>% c(getMediumGraphs(medSize, extremeOnly = extremeOnly))
+  }
+}
+
+graphTab    = tibble(size = sapply(allGraphs, gsize), order = sapply(allGraphs, gorder), n_auto = as.integer(sapply(allGraphs, automorphisms)["group_size",]))
+
+else {
+  curSupport   = curSupport + 1
+  if (curSupport >= curOrder + 3 && curOrder < maxOrder) {
+    curOrder   = curOrder + 1
+    curSupport = curOrder
+    break
+  }
+}
 
 ### Obsolete code from permuteGraph
 ### If pairsOnly = TRUE,  returns a list of nC2 adjacency matrices, one per pair
@@ -105,6 +105,14 @@ permuteGraph = function(Graph, pairsOnly = FALSE) {
   }
   allPerms
 }
+
+tailEdges = allPerms[Graph[, 1], , drop = FALSE]
+headEdges = allPerms[Graph[, 2], , drop = FALSE]
+swapPos   = which(tailEdges > headEdges)
+tempEdges = tailEdges[swapPos]
+tailEdges[swapPos] = headEdges[swapPos]
+headEdges[swapPos] = tempEdges
+allPerms = rbind(tailEdges, headEdges)
 
 ### This function optimises the number of red edges in a graph, represented by its edge 
 ### indices, over the Ramsey polytope on numVertices vertices (so 0 <= curEdges <= nC2)
@@ -168,7 +176,20 @@ parseResults = function(fname, removeFile = FALSE) {
   output
 }
 
-### Obsolete code from findNextGraph
+### Code from permuteGraph: eliminating duplicates obsolete as the group is known
+### There are duplicates; radix-sort adjacency lists and eliminate
+m = nrow(Graph)
+firstOrder  = cbind(as.vector(apply(headEdges, 2, order)), rep(1:numPerms, each = m))
+tailEdges   = matrix(tailEdges[firstOrder], ncol = numPerms)
+headEdges   = matrix(headEdges[firstOrder], ncol = numPerms)
+secondOrder = cbind(as.vector(apply(tailEdges, 2, order)), rep(1:numPerms, each = m))
+tailEdges   = matrix(tailEdges[secondOrder], ncol = numPerms)
+headEdges   = matrix(headEdges[secondOrder], ncol = numPerms)
+allPerms    = rbind(tailEdges, headEdges)
+allPerms    = allPerms[, !duplicated(t(allPerms)), drop = FALSE]
+stopifnot(ncol(allPerms) == expectedNumPerms)
+
+### Obsolete code from findNextGraph (now called tightenBounds)
 model = glpkAPI::initProbGLPK()
 glpkAPI::setProbNameGLPK(model, "Ramsey Polytope Optimisation")
 glpkAPI::addColsGLPK(model, ncols = numVars)
@@ -202,7 +223,7 @@ if (symRS) {
   }
 }
 
-### This function finds bounds on the number of red edges in a graph
+### This function finds bounds on the number of red edges in a graph; NOTE: has been renamed to tightenBounds in Ramsey.R!
 ### The Ramsey polytope is constructed over the specified order, numVertices; known bounds are provided via boundTab
 ### The graph will be the first (respectively, all) of the input graphs provided (allGraphs) to yield a non-trivial bound
 ### The allGraphAdj variable contains all the distinct permuted versions of each graph's adjacency list in the same order
