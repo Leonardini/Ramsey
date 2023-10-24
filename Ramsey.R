@@ -8,20 +8,17 @@ library(Matrix)
 library(slam)
 library(tidyverse)
 
-CPLEX_DIR        = "/Applications/CPLEX_Studio201/cplex/bin/x86-64_osx/"
-
-MAX_SIZE = 10L
-print("Initializing permutations")
+CPLEX_DIR = "/Applications/CPLEX_Studio201/cplex/bin/x86-64_osx/"
+MAX_SIZE  = 9L
+print(paste("Initializing permutations up to size", MAX_SIZE))
 for (ind in 1:MAX_SIZE) {
   print(ind)
   assign(paste0("PERMS", ind), permn(ind), envir = .GlobalEnv)
 }
 
-### GOAL: Check whether the constraints always form a set of disjoint trees, and double-check with Knuth's formula - in fact, it may be used to generate the embeddings!
-
 setwd("/Users/lchindelevitch/Downloads/NonPriority/Conjectures/RamseyNumbers")
 
-### TODO: Consider implementing a version that looks for cyclic orientations too; the idea is to only constrain delta vectors which admit a bipartition!
+### TODO: For lower bounds consider implementing a version that looks for cyclic orientations too; the idea is to only constrain delta vectors which admit a bipartition!
 
 ### This function extracts connected graphs from the files made by McKay's nauty
 ### Make sure that the conversion is done with the -el0o1 option in nauty::showg
@@ -646,7 +643,7 @@ constructPermGroup = function(generatorList, numElts, returnID = TRUE) {
   while (pos < numElts) {
     newActive = c()
     for (index in 1:L) {
-      nextElts = allElts[curActive, generatorList[index, , drop = FALSE]]
+      nextElts = allElts[curActive, generatorList[index, , drop = FALSE], drop = FALSE]
       badInds = which(duplicated(rbind(allElts[1:pos, ], nextElts))) - pos
       if (length(badInds) < numActive) {
         newPos = pos + (1:(numActive - length(badInds)))
@@ -898,4 +895,16 @@ parseProof = function(String, N = 9) {
     arrange(val)
   output = list(sumMat, totalRhs)
   output
+}
+
+testKnuth = function(N) { 
+  Graphs = getGraphs(numVerts = N)
+  count = length(Graphs)
+  fullTest = rep(FALSE, count)
+  for (ind in 1:count) {
+    print(ind)
+    Orbit = getOrbits(Graphs[[ind]])
+    fullTest[ind] = (girth(graph_from_edgelist(Orbit$comps, directed = FALSE), circle = FALSE)$girth == 0)
+  }
+  fullTest
 }
