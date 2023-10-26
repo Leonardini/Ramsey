@@ -919,19 +919,3 @@ parseProof = function(String, N = 9) {
   output
 }
 
-### This function tests a conjecture that the transitive reduction of the set of
-### precedence constraints for the lexicographically smallest element of a coset
-### of the automorphism group of a graph is a disjoint union of directed trees. 
-### It returns an all-TRUE vector iff the conjecture holds for graphs of order N
-testConjecture = function(N) { 
-  Graphs = getGraphs(numVerts = N)
-  count = length(Graphs)
-  fullTest = rep(FALSE, count)
-  print(paste("There are", count, "graphs to process"))
-  for (ind in 1:count) {
-    if (ind %% 10000 == 0) { print(ind) }
-    Orbit = getOrbits(Graphs[[ind]])
-    fullTest[ind] = !(any(duplicated(Orbit$comps[,2])))
-  }
-  fullTest
-}
