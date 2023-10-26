@@ -9,23 +9,25 @@ library(slam)
 library(tidyverse)
 
 CPLEX_DIR = "/Applications/CPLEX_Studio201/cplex/bin/x86-64_osx/"
+WORK_DIR  = "/Users/lchindelevitch/Downloads/NonPriority/Conjectures/RamseyNumbers"
 MAX_SIZE  = 9L
 print(paste("Initializing permutations up to size", MAX_SIZE))
 for (ind in 1:MAX_SIZE) {
   print(ind)
   assign(paste0("PERMS", ind), permn(ind), envir = .GlobalEnv)
 }
-
-setwd("/Users/lchindelevitch/Downloads/NonPriority/Conjectures/RamseyNumbers")
+setwd(WORK_DIR)
 
 ### TODO: For lower bounds consider implementing a version that looks for cyclic orientations too; the idea is to only constrain delta vectors which admit a bipartition!
+### TODO: Explore the use of DFS instead of BFS in searching for the proof, so that as soon as a new tighter bound is found, it is immediately added to the constraints.
+### TODO: Consider how additional constraint families can be made redundant (if they are implied not by a single other family of constraints, but by several other ones).
 
 ### This function extracts connected graphs from the files made by McKay's nauty
 ### Make sure that the conversion is done with the -el0o1 option in nauty::showg
-### If extremeOnly = TRUE, only keeps the graphs with sizes within 2 of min.
+### If extremeOnly = TRUE, only keeps the graphs with sizes within 1 of min/max.
 getGraphs = function(numVerts = 2, extremeOnly = FALSE, treesOnly = FALSE, twoTreesOnly = FALSE, ETOnly = FALSE, partiteOnly = FALSE) {
   if (!treesOnly && !twoTreesOnly && !ETOnly && !partiteOnly) {
-    fn = paste0("Graphs", ifelse(extremeOnly, "Extreme", ""), numVerts, ".RData")
+    fn = paste0("Graphs", numVerts, ".RData")
   } else {
     if (treesOnly) {
       fn = paste0("Trees", numVerts, ".RData")
@@ -41,7 +43,7 @@ getGraphs = function(numVerts = 2, extremeOnly = FALSE, treesOnly = FALSE, twoTr
     }
   }
   if (!file.exists(fn)) {
-    curText = readLines(paste0(ifelse(treesOnly, "trees", ifelse(twoTreesOnly, "TwoTrees", ifelse(ETOnly, "ET", ifelse(partiteOnly, "Bipartite", "graph")))), numVerts, ifelse(extremeOnly, "x", "c"), ".txt"))
+    curText = readLines(paste0(ifelse(treesOnly, "trees", ifelse(twoTreesOnly, "TwoTrees", ifelse(ETOnly, "ET", ifelse(partiteOnly, "Bipartite", "graph")))), numVerts, "c", ".txt"))
     L = length(curText)
     goodLines = 4 * (1:(L/4))
     numGraphs = L/4
@@ -82,12 +84,19 @@ getGraphs = function(numVerts = 2, extremeOnly = FALSE, treesOnly = FALSE, twoTr
     e = new.env()
     load(fn, envir = e)
     allG = get("allG", envir = e)
+    if (extremeOnly) {
+      curCounts = sapply(allG, length)/2
+      goodPos = ((curCounts <= numVerts) | (curCounts >= choose(numVerts, 2) - 1))
+      allG = allG[goodPos]
+    }
   }
   allG
 }
 
+### This function iteratively constructs a minimal set of graphs sufficient for a proof
+### that Ramsey(r, s) <= n; all of its other arguments are exactly as in iterateLPProof
 findMinimalGraphSet = function(n = 9L, r = 3L, s = 4L, maxOrder = 6L, symRS = FALSE, shortProofs = TRUE, lowerOnly = FALSE, minAuto = NULL, eps = NA,
-                               extremeOnly = FALSE, treesOnly = FALSE, twoTreesOnly = FALSE, ETOnly = FALSE, partiteOnly = FALSE, inds = NULL) {
+                               extremeOnly = FALSE, treesOnly = FALSE, twoTreesOnly = FALSE, ETOnly = FALSE, partiteOnly = FALSE, completeOnly = FALSE, inds = NULL) {
   lastSolution = NULL
   endpoint = ifelse(r == s, 1, 2)
   inds = sort(setdiff(inds, (1:endpoint)))
@@ -97,8 +106,8 @@ findMinimalGraphSet = function(n = 9L, r = 3L, s = 4L, maxOrder = 6L, symRS = FA
   while (pos >= 1) {
     print(pos)
     altInds = inds[-pos]
-    altRes  = iterateLPProof(n = n, r = r, s = s, maxOrder = maxOrder, symRS = symRS, shortProofs = shortProofs, lowerOnly = lowerOnly, minAuto = minAuto, eps = eps,
-                             extremeOnly = extremeOnly, treesOnly = treesOnly, twoTreesOnly = twoTreesOnly, ETOnly = ETOnly, partiteOnly = partiteOnly, inds = altInds)
+    altRes  = iterateLPProof(n = n, r = r, s = s, maxOrder = maxOrder, symRS = symRS, shortProofs = shortProofs, lowerOnly = lowerOnly, minAuto = minAuto, eps = eps, inds = altInds,
+                             extremeOnly = extremeOnly, treesOnly = treesOnly, twoTreesOnly = twoTreesOnly, ETOnly = ETOnly, partiteOnly = partiteOnly, completeOnly = completeOnly)
     if (length(altRes) > 1) {
       print(paste("Removing", inds[pos], "leaves the contradiction valid"))
       lastSolution = altRes
@@ -570,7 +579,11 @@ permuteGraph = function(Graph, orbits = NULL) {
       }
     }
   } else {
-    allPerms = get(paste0("PERMS", n), envir = .GlobalEnv)
+    if (n <= MAX_SIZE) {
+      allPerms = get(paste0("PERMS", n), envir = .GlobalEnv)
+    } else {
+      allPerms = permn(n)
+    }
   }
   allPerms = matrix(unlist(allPerms), nrow = n)
   allPerms = rbind(allPerms[Graph[, 1], , drop = FALSE], allPerms[Graph[, 2], , drop = FALSE])
@@ -605,6 +618,8 @@ getOrbits = function(Graph) {
   output
 }
 
+### This function constructs the transitive reduction of an input graph
+### The graphs' input and output formats are a two-column list of edges
 getTransitiveReduction = function(edgeList) {
   G0 = graph_from_edgelist(edgeList, directed = TRUE)
   M0 = get.adjacency(G0, sparse = FALSE)
@@ -617,6 +632,10 @@ getTransitiveReduction = function(edgeList) {
   newEdgeList
 }
 
+### This function constructs a minimal set of constraints of the form s[a] < s[b]
+### that the lexicographically smallest element of a coset of its input satisfies
+### The input is the permutation group with one column per element minus identity
+### The output is a two-column matrix where a row [ab] corresponds to s[a] < s[b]
 getComparisons = function(permGroup) {
   nr = nrow(permGroup)
   nc = ncol(permGroup)
@@ -632,15 +651,16 @@ getComparisons = function(permGroup) {
 ### This function constructs a permutation group of given size from its generators
 ### The construction works by an implicit breadth-first search of the Cayley graph
 ### NOTE: The generators are specified by row, but the group is returned by column
-constructPermGroup = function(generatorList, numElts, returnID = TRUE) {
+constructPermGroup = function(generatorList, numElts = NA, returnID = FALSE) {
   n = ncol(generatorList)
   L = nrow(generatorList)
+  if (is.na(numElts)) { numElts = factorial(n) }
   allElts = matrix(NA, numElts, n)
   allElts[1:(L + 1), ] = rbind(1:n, generatorList)
   curActive = 2:(L + 1)
   numActive = L
   pos = L + 1
-  while (pos < numElts) {
+  while (numActive > 0) {
     newActive = c()
     for (index in 1:L) {
       nextElts = allElts[curActive, generatorList[index, , drop = FALSE], drop = FALSE]
@@ -655,6 +675,7 @@ constructPermGroup = function(generatorList, numElts, returnID = TRUE) {
     curActive = newActive
     numActive = length(curActive)
   }
+  allElts = allElts[1:pos, , drop = FALSE]
   if (!returnID) { allElts = allElts[-1, , drop = FALSE] }
   allElts = t(allElts)
   allElts
@@ -801,6 +822,7 @@ reconstructContradictions = function(allProofs, boundTab) {
 ### The first input is the list of contradictions, the second, the list of all the graphs used.
 ### The labels are used to create a file with each relevant graph; the special labels are used
 ### for the two starting graphs (which can also be identical); the best proof is saved in fname.
+### If plotGraphs = TRUE, the graphs are also plotted into PDF files, each named as [label].pdf
 prepareBestProof = function(contradictions, listOfGraphs, labels = LETTERS, r = 3, s = 4, specialLabels = (if (r != s) { c("Z", "X") } else { "X" }), 
                             fname = paste0("ShortProofR", r, "S", s, ".RData"), plotGraphs = FALSE) {
   endpoint = 1 + (r != s)
@@ -897,14 +919,19 @@ parseProof = function(String, N = 9) {
   output
 }
 
-testKnuth = function(N) { 
+### This function tests a conjecture that the transitive reduction of the set of
+### precedence constraints for the lexicographically smallest element of a coset
+### of the automorphism group of a graph is a disjoint union of directed trees. 
+### It returns an all-TRUE vector iff the conjecture holds for graphs of order N
+testConjecture = function(N) { 
   Graphs = getGraphs(numVerts = N)
   count = length(Graphs)
   fullTest = rep(FALSE, count)
+  print(paste("There are", count, "graphs to process"))
   for (ind in 1:count) {
-    print(ind)
+    if (ind %% 10000 == 0) { print(ind) }
     Orbit = getOrbits(Graphs[[ind]])
-    fullTest[ind] = (girth(graph_from_edgelist(Orbit$comps, directed = FALSE), circle = FALSE)$girth == 0)
+    fullTest[ind] = !(any(duplicated(Orbit$comps[,2])))
   }
   fullTest
 }
