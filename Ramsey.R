@@ -278,10 +278,8 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = round(2 * n / 3), sy
 ### that also contain relevant information in graphInfo (in particular, whose indices are contained in its first column).
 ### If eps is specified (ie, not NA), the function looks for an improvement over the best existing bound by at least eps.
 tightenBounds = function(numVertices, allGraphs, allGraphAdj, allGraphOrb, boundTab, graphInfo, nRound = 0, symRS = FALSE, shortProofs = TRUE, eps = NA, lowerOnly = FALSE) {
-  L = nrow(graphInfo)
   prep = prepareRamseyLP(numVertices = numVertices, allGraphs = allGraphs, allGraphAdj = allGraphAdj, allGraphOrb = allGraphOrb, graphBounds = boundTab, 
                          graphInfo = graphInfo, sparse = TRUE)
-  fname    = paste0("TempFile", nRound, ".lp")
   numVars  = ncol(prep$mat)
   numConst = length(prep$dir)
   numNonZeros = tail(prep$mat@p,1)
@@ -291,9 +289,11 @@ tightenBounds = function(numVertices, allGraphs, allGraphAdj, allGraphOrb, bound
   model = cplexAPI::initProbCPLEX(envir, pname = "Ramsey Polytope Optimisation")
   cplexAPI::copyLpwNamesCPLEX(env = envir, lp = model, nCols = numVars, nRows = numConst, lpdir = CPX_MIN, objf = rep(0, numVars), rhs = prep$rhs, sense = prep$dir, 
   matbeg = prep$mat@p[1:numVars], matcnt = diff(prep$mat@p), matind = prep$mat@i, matval = rep(1, numNonZeros), lb = rep(0, numVars), ub = rep(1, numVars), cnames = CN)
+  fname  = paste0("TempFile", nRound, ".lp")
   cplexAPI::writeProbCPLEX(envir, model, fname = fname)
   cplexAPI::setIntParmCPLEX(envir, cplexAPI::CPXPARAM_Preprocessing_Presolve, 0)
   print(paste("There are", numConst, "constraints over", numVars, "variables"))
+  L = nrow(graphInfo)
   output      = vector("list", L)
   auxMatrix   = createPositionMatrix(numVertices, symmetric = TRUE)
   print(paste("There are", L, "graphs to process"))
@@ -538,8 +538,8 @@ constructProof = function(LP, dualVariables, lower = TRUE, shortProofs = FALSE) 
   dualValues = dualVariables[goodRows]
   dualValues = dualValues/min(abs(dualValues))
   dir        = LP$dir[goodRows]
+  relInfo    = LP$map[goodRows, , drop = FALSE]
   if (shortProofs) {
-    relInfo   = LP$map[goodRows, , drop = FALSE]
     proof     = tibble(coeff = dualValues, constr = goodRows, dir = dir, bound = relInfo[,1], version = relInfo[,2], combo = relInfo[,3])
   } else {
     subMatrix = as.matrix(LP$mat[goodRows, , drop = FALSE])
@@ -547,6 +547,7 @@ constructProof = function(LP, dualVariables, lower = TRUE, shortProofs = FALSE) 
     proof     = cbind(coeff = dualValues, subMatrix, rhs = rhs)
     flipRows  = which(dir == ifelse(lower, "L", "G"))
     proof[flipRows, ] %<>% magrittr::multiply_by(-1)
+    proof %<>% cbind(bound = relInfo[,1])
   }
   proof
 }
@@ -618,20 +619,6 @@ getOrbits = function(Graph) {
   output
 }
 
-### This function constructs the transitive reduction of an input graph
-### The graphs' input and output formats are a two-column list of edges
-getTransitiveReduction = function(edgeList) {
-  G0 = graph_from_edgelist(edgeList, directed = TRUE)
-  M0 = get.adjacency(G0, sparse = FALSE)
-  D0 = distances(G0, mode = "out")
-  M1 = (is.finite(D0) & D0 > 0)
-  M2 = pmin(M0 %*% M1, 1)
-  G1 = graph_from_adjacency_matrix(M2)
-  G2 = graph.difference(G0, G1)
-  newEdgeList = get.edgelist(G2)
-  newEdgeList
-}
-
 ### This function constructs a minimal set of constraints of the form s[a] < s[b]
 ### that the lexicographically smallest element of a coset of its input satisfies
 ### The input is the permutation group with one column per element minus identity
@@ -642,9 +629,14 @@ getComparisons = function(permGroup) {
   autoComp = apply(permGroup, 2, function(x) { min(which(x != 1:nr)) })
   autoNext = permGroup[cbind(autoComp, 1:nc)]
   goodComps = tibble(first = autoComp, second = autoNext) %>%
-    distinct() %>%
+    distinct()
+  # finalComps = getTransitiveReduction(as.matrix(goodComps))
+  finalComps = goodComps %>%
+    group_by(second) %>%
+    filter(first == max(first)) %>%
+    ungroup() %>%
+    arrange(first, second) %>%
     as.matrix()
-  finalComps = getTransitiveReduction(goodComps)
   finalComps
 }
 
@@ -710,48 +702,109 @@ createPositionMatrix = function(numVertices, symmetric = TRUE) {
   outMat
 }
 
-### This function tries to construct an optimized proof for an input bound (cut).
-### LPfile contains the file from which it was proved; the graph is the one that
-### is being bounded; sense is "min" for minimization or "max" for maximization.
+### This function constructs optimised proofs from the outputs of iterateLPProof
 ### If eps is non-NA, the 1 (-1) increment in objective value is replaced by eps.
-### The objective is to identify a proof with a minimal number of dual variables.
-optimizeProof = function(LPfile, Graph, sense = "min", eps = NA) {
-  envir = cplexAPI::openEnvCPLEX()
-  model = cplexAPI::initProbCPLEX(envir, pname = "Ramsey Bound Optimisation")
-  cplexAPI::readCopyProbCPLEX(envir, model, fname = LPfile)
-  numVars  = cplexAPI::getNumCols(envir, model)
-  numConst = cplexAPI::getNumRows(envir, model)
-  numVerts = sqrt(2 * numVars + 1/4) + 1/2
-  stopifnot(near(numVerts, round(numVerts)))
-  numVerts = round(numVerts)
-  n = max(Graph)
-  stopifnot(n <= numVerts)
-  auxMatrix = createPositionMatrix(numVerts, symmetric = TRUE)
-  curObjective = rep(0, numVars)
-  curObjective[curEdges] = 1
-  cplexAPI::chgObjCPLEX(envir, model, ncols = numVars, ind = 0:(numVars - 1), val = curObjective)
-  cplexAPI::setObjDirCPLEX(envir, model, ifelse(sense == "min", CPX_MIN, CPX_MAX))
-  cplexAPI::setIntParmCPLEX(envir, cplexAPI::CPXPARAM_Preprocessing_Presolve, 0)
-  cplexAPI::dualoptCPLEX(envir, model)
-  curObjValue = cplexAPI::solutionCPLEX(envir, model)$objval
-  objTarget = ifelse(sense == "min", ceiling(curObjValue), floor(curObjValue))
-  dualLPFile = str_replace(LPfile, ".lp", "Dual.lp")
-  dualWriteCPLEX(envir, model, fname = dualLPFile)
-  cplexAPI::readProbCPLEX(envir, model, fname = dualLPfile)
-  origDualObj = cplexAPI::getObjCPLEX(envir, model, 0, numConst - 1)
-  epsilon = ifelse(is.na(eps), 1, eps)
-  newBound = objTarget + ifelse(sense == "min", -1, 1) * (1 - epsilon)
-  newSense = ifelse(sense == "min", "G", "L")
-  newRange = rbind(1:numConst, numConst + (1:numConst), 1:numConst, numConst + (1:numConst))
-  cplexAPI::newColsCPLEX(envir, model, ncols = numConst, lb = rep(0, numConst), xctype = rep(cplexAPI::CPX_CONTINUOUS, numConst))
-  cplexAPI::addRowsCPLEX(envir, model, nrows = 2 * numConst + 1, nnz = 5 * numConst, rhs = c(rep(0, 2 * numConst), newBound), sense = c(rep("G", 2 * numConst), newSense), 
-                        matbeg = c(rep(2, 2 * numConst), numConst), matval = c(as.vector(newRange), 1:numConst), matind = c(rep(c(-1, 1, 1, 1), numConst), origDualObj))
-  newDualObj = rep(c(0, 1), each = numConst)
-  cplexAPI::chgObjCPLEX(envir, model, ncols = numVars, ind = 0:(2 * numConst - 1), val = newDualObj)
-  cplexAPI::setObjDirCPLEX(envir, model, ifelse(sense == "min", CPX_MAX, CPX_MIN))
-  cplexAPI::primaloptCPLEX(envir, model)
-  dualSolution = cplexAPI::solutionCPLEX(envir, model)$x[1:numConst]
-  dualSolution
+### The objective is to identify proofs with a minimal number of dual variables.
+optimiseProofs = function(output, eps = NA) {
+  allContradictions = output[[4]]
+  allGraphs = output[[3]]
+  L = length(allGraphs)
+  allGraphAdj = vector("list", L)
+  allGraphOrb = vector("list", L)
+  r = as.integer((sqrt(allContradictions[[1]]$size[1] * 8 + 1) + 1)/2)
+  s = as.integer((sqrt(allContradictions[[1]]$size[2] * 8 + 1) + 1)/2)
+  bestProof = prepareBestProof(allContradictions, allGraphs, r = r, s = s, fname = NULL, plotGraphs = TRUE) %>%
+    mutate(subsumed = FALSE)
+  M = nrow(bestProof)
+  allProofs = vector("list", M)
+  pos = 3
+  maxIter = max(bestProof$step)
+  numAutos = sapply(allGraphs, function(x) { as.integer(automorphisms(graph_from_edgelist(matrix(x, ncol = 2), directed = FALSE))$group_size) })
+  graphTab = tibble(index = 1:L, size = sapply(allGraphs, length)/2, order = sapply(allGraphs, max), n_auto = numAutos, n_embed = factorial(order)/n_auto)
+  for (ind in 2:maxIter) {
+    prevBounds = bestProof %>%
+      filter(step < ind) %>%
+      group_by(graph, direction) %>%
+      filter(step == max(step)) %>%
+      ungroup()
+    curBounds = bestProof %>%
+      filter(step == ind)
+    curSupport = curBounds$support[1]
+    auxMatrix = createPositionMatrix(curSupport, symmetric = TRUE)
+    prep = prepareRamseyLP(numVertices = curSupport, allGraphs = allGraphs, allGraphAdj = allGraphAdj, allGraphOrb = allGraphOrb, graphBounds = prevBounds, 
+                           graphInfo = graphTab, sparse = TRUE)
+    numVars  = ncol(prep$mat)
+    numConst = length(prep$dir)
+    numNonZeros = tail(prep$mat@p,1)
+    CN = paste0("X", 1:numVars)
+    initObjective = rep(0, numVars)
+    envir = cplexAPI::openEnvCPLEX()
+    model = cplexAPI::initProbCPLEX(envir, pname = "Ramsey Bound Optimisation")
+    dualModel = cplexAPI::initProbCPLEX(envir, pname = "Ramsey Proof Optimisation")
+    cplexAPI::copyLpwNamesCPLEX(env = envir, lp = model, nCols = numVars, nRows = numConst, lpdir = CPX_MIN, objf = rep(0, numVars), rhs = prep$rhs, sense = prep$dir, 
+    matbeg = prep$mat@p[1:numVars], matcnt = diff(prep$mat@p), matind = prep$mat@i, matval = rep(1, numNonZeros), lb = rep(0, numVars), ub = rep(1, numVars), cnames = CN)
+    fname  = paste0("ProofR", r, "S", s, "I", ind, ".lp")
+    # cplexAPI::writeProbCPLEX(envir, model, fname = fname)
+    cplexAPI::setIntParmCPLEX(envir, cplexAPI::CPXPARAM_Preprocessing_Presolve, 0)
+    numBounds = nrow(curBounds)
+    numVerts = as.integer((sqrt(numVars * 8 + 1) + 1)/2)
+    allPairs = combn2(1:numVerts)
+    for (index in 1:numBounds) {
+      curBound = curBounds %>% slice(index)
+      curIndex = curBound$graph
+      curGraph = allGraphs[[curIndex]]
+      curEdges = auxMatrix[matrix(curGraph, ncol = 2)]
+      curSense = curBound$direction
+      curTarget = curBound$bound
+      redCNames = cplexAPI::getColNameCPLEX(envir, model, 0, numVars - 1) %>% 
+        str_remove_all("X") %>% 
+        as.integer()
+      curObjective = initObjective
+      curObjective[match(curEdges, redCNames)] = 1
+      cplexAPI::chgObjCPLEX(envir, model, ncols = numVars, ind = 0:(numVars - 1), val = curObjective)
+      cplexAPI::setObjDirCPLEX(envir, model, ifelse(curSense == "G", CPX_MIN, CPX_MAX))
+      if (is.na(eps)) {
+        cplexAPI::dualoptCPLEX(envir, model)
+        origObj = cplexAPI::solutionCPLEX(envir, model)$objval
+      }
+      dualMPSFile = str_replace(fname, ".lp", "Dual.mps")
+      dualWriteCPLEX(envir, model, fname = dualMPSFile)
+      cplexAPI::readCopyProbCPLEX(envir, dualModel, fname = dualMPSFile)
+      # cplexAPI::writeProbCPLEX(envir, dualModel, fname = str_replace(dualMPSFile, ".mps", ".lp"))
+      extConst = cplexAPI::getNumColsCPLEX(envir, dualModel)
+      stopifnot(extConst == numConst + numVars)
+      newBound = ifelse(!is.na(eps), curTarget + ifelse(curSense == "G", -1, 1) * (1 - eps), origObj)
+      origDualObj = cplexAPI::getObjCPLEX(envir, dualModel, 0, extConst - 1) * ifelse(curSense == "G", -1, 1)
+      cplexAPI::addRowsCPLEX(envir, dualModel, nrows = 1, nnz = extConst, rhs = newBound, sense = ifelse(is.na(eps), curSense, "E"),
+                             matbeg = 0, matind = 0:(extConst - 1), matval = origDualObj, ncols = 0, rnames = paste0("D", 0))
+      newRange = rbind(1:extConst, extConst + (1:extConst), 1:extConst, extConst + (1:extConst))
+      cplexAPI::newColsCPLEX(envir, dualModel, ncols = extConst, lb = rep(0, extConst), xctype = rep(cplexAPI::CPX_CONTINUOUS, extConst), cnames = c(paste0("Y", 1:numConst), paste0("Z", 1:numVars)))
+      cplexAPI::addRowsCPLEX(envir, dualModel, nrows = 2 * extConst, nnz = 4 * extConst, rhs = rep(0, 2 * extConst), sense = rep("G", 2 * extConst), 
+      matbeg = 2 * (0:(2 * extConst - 1)), matind = as.vector(newRange) - 1, matval = rep(c(-1, 1, 1, 1), extConst), ncols = 0, rnames = paste0("D", 1:(2 * extConst)))
+      dualCNames = cplexAPI::getColNameCPLEX(envir, dualModel, 0, 2 * extConst - 1)
+      newDualObj = rep(0, 2 * extConst)
+      newDualObj[str_starts(dualCNames, "Y")] = 1 
+      cplexAPI::chgObjCPLEX(envir, dualModel, ncols = 2 * extConst, ind = 0:(2 * extConst - 1), val = newDualObj)
+      # cplexAPI::writeProbCPLEX(envir, dualModel, fname = str_replace(dualMPSFile, ".mps", ".lp"))
+      cplexAPI::chgProbTypeCPLEX(envir, dualModel, ptype = cplexAPI::CPXPROB_LP)
+      cplexAPI::primoptCPLEX(envir, dualModel)
+      dualSolution = cplexAPI::solutionCPLEX(envir, dualModel)$x[1:numConst]
+      sharpProof = constructProof(prep, dualSolution, lower = (curSense == "G"), shortProofs = FALSE)
+      colnames(sharpProof) = c("coeff", paste0("X", allPairs[,1], ",", allPairs[,2]), "rhs", "bound")
+      prevBounds %<>%
+        select(number, label)
+      sharpProof %<>%
+        as_tibble() %>%
+        left_join(prevBounds, by = join_by(bound == number))
+      allProofs[[pos]] = sharpProof
+      pos = pos + 1
+    }
+    cplexAPI::delProbCPLEX(envir, model)
+    cplexAPI::delProbCPLEX(envir, dualModel)
+    cplexAPI::closeEnvCPLEX(envir)
+  }
+  output = list(bestProof = bestProof, allProofs = allProofs)
+  output
 }
 
 ### This function traces back through a list of short proofs to obtain contradictions
@@ -839,7 +892,7 @@ prepareBestProof = function(contradictions, listOfGraphs, labels = LETTERS, r = 
   if (bestSize > length(usableLabels) + endpoint) { print("Not enough labels!"); return() }
   uGraphs = sort(unique(bestContradiction$graph))
   firstGraphs = bestContradiction %>%
-    slice(1:2) %>%
+    slice(1:endpoint) %>%
     pull(graph)
   nameTab = tibble(index = setdiff(uGraphs, firstGraphs), label = usableLabels[1:(bestSize - endpoint)]) %>%
     bind_rows(tibble(index = firstGraphs, label = specialLabels)) %>%
@@ -866,56 +919,8 @@ prepareBestProof = function(contradictions, listOfGraphs, labels = LETTERS, r = 
       dev.off()
     }
   }
-  save(bestContradiction, miniContradiction, file = fname)
+  if (!is.null(fname)) {
+    save(bestContradiction, miniContradiction, file = fname)
+  }
   bestContradiction
 }
-
-### This function parses a written proof in LaTeX format, providing the totals. 
-### Note: replace all \ with \\ in the LaTeX source before passing it as input!
-parseProof = function(String, N = 9) {
-  String %<>%
-    str_remove_all("\\{") %>%
-    str_remove_all("\\}") %>%
-    str_remove_all("\\geq")
-  String %<>%
-    str_split('\n') %>%
-    unlist() %>%
-    str_remove_all("X\\[") %>%
-    str_remove_all("\\]") %>%
-    str_remove_all("[&]") %>%
-    str_remove_all("\\\\")
-  pairs = String %>%
-    str_extract_all("[(][0-9,]+[)]")
-  coeffs = String %>%
-    str_extract("^[-]?[0-9]+") %>%
-    as.integer()
-  unitPos = which(is.na(coeffs))
-  if (length(unitPos) > 0) {
-    coeffs[unitPos] = ifelse(str_starts(String[unitPos], "-"), -1L, 1L)
-  }
-  rhs = String %>%
-    str_extract("[-]?[0-9]+$") %>%
-    as.integer()
-  Mats = lapply(pairs, function(x) {
-    x %<>%
-      str_remove_all("[(]") %>%
-      str_remove_all("[)]") %>% 
-      str_split_fixed(",", n = 2)
-    mode(x) = "integer"
-    x
-  })
-  Mat = matrix(0, N, N)
-  for (index in 1:length(Mats)) {
-    curPairs = Mats[[index]]
-    Mat[curPairs] %<>%
-      add(coeffs[index])
-  }
-  totalRhs = sum(rhs)
-  sumMat = which(Mat != 0, arr.ind = TRUE) %>%
-    as_tibble() %>%
-    mutate(val = Mat[cbind(row, col)]) %>%
-    arrange(val)
-  output = list(sumMat, totalRhs)
-  output
-}
-

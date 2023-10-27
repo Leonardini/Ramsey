@@ -2,6 +2,56 @@
 NUM_ATLAS_GRAPHS = 1252L
 MAX_ATLAS_SIZE   = 7L
 
+### This function parses a written proof in LaTeX format, providing the totals. 
+### Note: replace all \ with \\ in the LaTeX source before passing it as input!
+### NOTE: This function is no longer used; it is now subsumed by optimiseProofs
+parseProof = function(String, N = 9) {
+  String %<>%
+    str_remove_all("\\{") %>%
+    str_remove_all("\\}") %>%
+    str_remove_all("\\geq")
+  String %<>%
+    str_split('\n') %>%
+    unlist() %>%
+    str_remove_all("X\\[") %>%
+    str_remove_all("\\]") %>%
+    str_remove_all("[&]") %>%
+    str_remove_all("\\\\")
+  pairs = String %>%
+    str_extract_all("[(][0-9,]+[)]")
+  coeffs = String %>%
+    str_extract("^[-]?[0-9]+") %>%
+    as.integer()
+  unitPos = which(is.na(coeffs))
+  if (length(unitPos) > 0) {
+    coeffs[unitPos] = ifelse(str_starts(String[unitPos], "-"), -1L, 1L)
+  }
+  rhs = String %>%
+    str_extract("[-]?[0-9]+$") %>%
+    as.integer()
+  Mats = lapply(pairs, function(x) {
+    x %<>%
+      str_remove_all("[(]") %>%
+      str_remove_all("[)]") %>% 
+      str_split_fixed(",", n = 2)
+    mode(x) = "integer"
+    x
+  })
+  Mat = matrix(0, N, N)
+  for (index in 1:length(Mats)) {
+    curPairs = Mats[[index]]
+    Mat[curPairs] %<>%
+      add(coeffs[index])
+  }
+  totalRhs = sum(rhs)
+  sumMat = which(Mat != 0, arr.ind = TRUE) %>%
+    as_tibble() %>%
+    mutate(val = Mat[cbind(row, col)]) %>%
+    arrange(val)
+  output = list(sumMat, totalRhs)
+  output
+}
+
 ### This function tests a conjecture that the transitive reduction of the set of
 ### precedence constraints for the lexicographically smallest element of a coset
 ### of the automorphism group of a graph is a disjoint union of directed trees. 
@@ -18,6 +68,21 @@ testConjecture = function(N) {
     fullTest[ind] = !(any(duplicated(Orbit$comps[,2])))
   }
   fullTest
+}
+
+### This function constructs the transitive reduction of an input graph
+### The graphs' input and output formats are a two-column list of edges
+### NOTE: This function is no longer used due to a faster alternative.
+getTransitiveReduction = function(edgeList) {
+  G0 = graph_from_edgelist(edgeList, directed = TRUE)
+  M0 = get.adjacency(G0, sparse = FALSE)
+  D0 = distances(G0, mode = "out")
+  M1 = (is.finite(D0) & D0 > 0)
+  M2 = pmin(M0 %*% M1, 1)
+  G1 = graph_from_adjacency_matrix(M2)
+  G2 = graph.difference(G0, G1)
+  newEdgeList = get.edgelist(G2)
+  newEdgeList
 }
 
 ### This function extracts small graphs from the graph atlas provided in igraph
