@@ -2,6 +2,88 @@
 NUM_ATLAS_GRAPHS = 1252L
 MAX_ATLAS_SIZE   = 7L
 
+### This function constructs a minimal set of constraints of the form s[a] < s[b]
+### that the lexicographically smallest element of a coset of the group generated
+### by its input satisfies; the number of group elements is also optionally given
+### The input is the permutation group with one column per element minus identity
+### The output is a two-column matrix where a row [ab] corresponds to s[a] < s[b]
+getLexConstraints = function(generatorList, numElts = NA) {
+  n = ncol(generatorList)
+  L = nrow(generatorList)
+  allConstraints = matrix(NA, choose(n, 2), 2)
+  pos = 1
+  id = 1:n
+  for (index in 1:L) {
+    curGen = generatorList[index, ]
+    genOrder = purrr::reduce(table(clusters(permToGraph(generatorList[1,]))$membership), pracma::Lcm, .init = 1)
+    curPower = id
+    for (power in 1:(genOrder - 1)) {
+      curPower = curGen[curPower]
+      curFirst = min(which(curPower != id))
+      allConstraints[pos, ] = c(curFirst, curPower[curFirst])
+      pos = pos + 1
+    }
+  }
+  allConstraints = allConstraints[1:(pos - 1), , drop = FALSE]
+  miniGroups = split(allConstraints[,1], allConstraints[,2])
+  miniGroups = miniGroups[sapply(miniGroups, length) > 1]
+  LG = length(miniGroups)
+  if (LG > 0) {
+    miniGroups %<>%
+      lapply(function(x) { y = sort(x); y = rep(y, each = 2); y = y[-c(1, length(y))]; y })
+    allConstraints %<>%
+      rbind(matrix(unlist(miniGroups), ncol = 2, byrow = TRUE))
+  }
+  allConstraints %<>%
+    set_colnames(c("first", "second")) %>%
+    as_tibble() %>%
+    distinct() %>%
+    group_by(second) %>%
+    filter(first == max(first)) %>%
+    ungroup() %>%
+    arrange(first, second) %>%
+    as.matrix()
+  if (!is.na(numElts)) {
+    expectedSize = getSubtreeSizes(allConstraints, n)$size
+    stopifnot(expectedSize == numElts)
+  }
+  allConstraints
+}
+
+### This function computes the size of the subtrees in a diforest input by edges
+### It also returns the product of all the subtree sizes in its second argument.
+getSubtreeSizes = function(allConstraints, n) {
+  sub = rep(1, n)
+  M = nrow(allConstraints)
+  if (M == 0) { return(1) }
+  for (ind in M:1) {
+    cur = allConstraints[ind, ]
+    sub[cur[1]] %<>% add(sub[cur[2]]) 
+  }
+  output = list(subtreeSizes = sub, size = prod(sub))
+  output
+}
+
+### This function tests a conjecture that the transitive reduction of the set of
+### precedence constraints for the lexicographically smallest element of a coset
+### can be obtained directly from the generators, not their products; fails @ C5
+testConjectureNew = function(N) { 
+  Graphs = getGraphs(numVerts = N)
+  count = length(Graphs)
+  fullTest = rep(FALSE, count)
+  print(paste("There are", count, "graphs to process"))
+  for (ind in 1:count) {
+    if (ind %% 1 == 0) { print(ind) }
+    iGraph = makeIgraph(Graphs[[ind]])
+    autoGens = automorphism_group(iGraph)
+    if (length(autoGens) > 0) {
+      autoGens %<>% do.call(rbind, .)
+      autoSize = as.integer(automorphisms(iGraph)$group_size)
+      Const = getLexConstraints(autoGens, autoSize)
+    }
+  }
+}
+
 ### This function parses a written proof in LaTeX format, providing the totals. 
 ### Note: replace all \ with \\ in the LaTeX source before passing it as input!
 ### NOTE: This function is no longer used; it is now subsumed by optimiseProofs

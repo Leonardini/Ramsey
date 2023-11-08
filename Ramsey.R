@@ -5,93 +5,17 @@ library(igraph)
 library(cplexAPI)
 library(magrittr)
 library(Matrix)
+library(pracma)
 library(slam)
 library(tidyverse)
 
 CPLEX_DIR = "/Applications/CPLEX_Studio201/cplex/bin/x86-64_osx/"
 WORK_DIR  = "/Users/lchindelevitch/Downloads/NonPriority/Conjectures/RamseyNumbers"
-MAX_SIZE  = 9L
-print(paste("Initializing permutations up to size", MAX_SIZE))
-for (ind in 1:MAX_SIZE) {
-  print(ind)
-  assign(paste0("PERMS", ind), permn(ind), envir = .GlobalEnv)
-}
 setwd(WORK_DIR)
+source("Ramsey/Utilities.R")
 
 ### TODO: For lower bounds consider implementing a version that looks for cyclic orientations too; the idea is to only constrain delta vectors which admit a bipartition!
 ### TODO: Explore the use of DFS instead of BFS in searching for the proof, so that as soon as a new tighter bound is found, it is immediately added to the constraints.
-### TODO: Consider how additional constraint families can be made redundant (if they are implied not by a single other family of constraints, but by several other ones).
-
-### This function extracts connected graphs from the files made by McKay's nauty
-### Make sure that the conversion is done with the -el0o1 option in nauty::showg
-### If extremeOnly = TRUE, only keeps the graphs with sizes within 1 of min/max.
-getGraphs = function(numVerts = 2, extremeOnly = FALSE, treesOnly = FALSE, twoTreesOnly = FALSE, ETOnly = FALSE, partiteOnly = FALSE) {
-  if (!treesOnly && !twoTreesOnly && !ETOnly && !partiteOnly) {
-    fn = paste0("Graphs", numVerts, ".RData")
-  } else {
-    if (treesOnly) {
-      fn = paste0("Trees", numVerts, ".RData")
-    }
-    if (twoTreesOnly) {
-      fn = paste0("TwoTrees", numVerts, ".RData")
-    }
-    if (ETOnly) {
-      fn = paste0("ET", numVerts, "c.RData")
-    }
-    if (partiteOnly) {
-      fn = paste0("Bipartite", numVerts, ".RData")
-    }
-  }
-  if (!file.exists(fn)) {
-    curText = readLines(paste0(ifelse(treesOnly, "trees", ifelse(twoTreesOnly, "TwoTrees", ifelse(ETOnly, "ET", ifelse(partiteOnly, "Bipartite", "graph")))), numVerts, "c", ".txt"))
-    L = length(curText)
-    goodLines = 4 * (1:(L/4))
-    numGraphs = L/4
-    numEdges = curText[goodLines - 1] %>%
-      str_split_fixed(" ", n = 2) %>%
-      magrittr::extract(, 2) %>%
-      as.integer()
-    curText = curText[goodLines]
-    curText = split(curText, numEdges)
-    numByEdge = sapply(curText, length)
-    numCounts = length(curText)
-    allG = vector("list", numCounts)
-    pos = 1
-    for (index in 1:numCounts) {
-      curNumber = numByEdge[index]
-      curCounts = as.integer(names(curText)[index])
-      print(paste("Processing the", curNumber, "graphs with", curCounts, "edges"))
-      if (!extremeOnly || (curCounts <= numVerts) || (curCounts >= choose(numVerts, 2) - 1)) {
-        curX = curText[[index]] %>%
-          str_split("  ") %>%
-          unlist() %>%
-        mode(curX) = "integer"
-        tails = curX[,1] %>%
-          matrix(nrow = curCounts)
-        heads = curX[,2] %>%
-          matrix(nrow = curCounts)
-        curX = rbind(tails, heads)
-        allG[[pos]] = as.list(as.data.frame(curX)) %>%
-          set_names(NULL)
-        pos = pos + 1
-      }
-    }
-    allG = allG[1:(pos - 1)]
-    allG = do.call(c, allG)
-    save(allG, file = fn)
-  }
-  else {
-    e = new.env()
-    load(fn, envir = e)
-    allG = get("allG", envir = e)
-    if (extremeOnly) {
-      curCounts = sapply(allG, length)/2
-      goodPos = ((curCounts <= numVerts) | (curCounts >= choose(numVerts, 2) - 1))
-      allG = allG[goodPos]
-    }
-  }
-  allG
-}
 
 ### This function iteratively constructs a minimal set of graphs sufficient for a proof
 ### that Ramsey(r, s) <= n; all of its other arguments are exactly as in iterateLPProof
@@ -149,7 +73,7 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = round(2 * n / 3), sy
     for (gsize in 2:maxOrder) {
       allGraphs %<>% c(getGraphs(gsize, extremeOnly = extremeOnly, treesOnly = treesOnly, twoTreesOnly = twoTreesOnly, ETOnly = ETOnly, partiteOnly = partiteOnly))
     }
-    numAutos    = sapply(allGraphs, function(x) { as.integer(automorphisms(graph_from_edgelist(matrix(x, ncol = 2), directed = FALSE))$group_size) })
+    numAutos    = sapply(allGraphs, function(x) { as.integer(automorphisms(makeIgraph(x))$group_size) })
     graphTab    = tibble(size = sapply(allGraphs, length)/2, order = sapply(allGraphs, max), n_auto = numAutos, n_embed = factorial(order)/n_auto)
     repeatGraphs = graphTab %>%
       rowid_to_column(var = "index") %>%
@@ -203,9 +127,10 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = round(2 * n / 3), sy
     curGraphTab = graphTab %>% 
       filter(order >= min(r, s) & order <= curOrder)
     print(paste("Exploring graphs on up to", curOrder, "vertices with support size", curSupport))
-    lowerBounds = identifySubsumedBounds(allGraphs, boundTab, curGraphTab, lower = TRUE)
-    upperBounds = identifySubsumedBounds(allGraphs, boundTab, curGraphTab, lower = FALSE)
-    boundTab    = bind_rows(lowerBounds, upperBounds)
+    boundTab = eliminateRedundantBounds(allGraphs, boundTab, curGraphTab, curSupport)
+    ### lowerBounds = identifySubsumedBounds(allGraphs, boundTab, curGraphTab, lower = TRUE)
+    ### upperBounds = identifySubsumedBounds(allGraphs, boundTab, curGraphTab, lower = FALSE)
+    ### boundTab    = bind_rows(lowerBounds, upperBounds)
     curRound    = curRound + 1
     finalResult  = tightenBounds(numVertices = curSupport, allGraphs = allGraphs, allGraphAdj = allGraphAdj, allGraphOrb = allGraphOrb, boundTab = boundTab, 
                    graphInfo = curGraphTab, nRound = paste0("R", r, "S", s, "I", curRound), symRS = symRS, shortProofs = shortProofs, eps = eps, lowerOnly = lowerOnly)
@@ -270,6 +195,75 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = round(2 * n / 3), sy
   output
 }
 
+### This function looks for and elmiminates any redundant bounds on a graph set.
+eliminateRedundantBounds = function(allGraphs, boundTab, curGraphTab, support) {
+  if (is.matrix(allGraphs)) {
+    allGraphs %<>%
+      split(1:nrow(.)) %>%
+      lapply(function(x) { y = x[x != 0]; y })
+  }
+  if ("graph" %in% colnames(curGraphTab)) {
+    curGraphTab %<>%
+      rename(index = graph)
+  }
+  lowerBounds = identifySubsumedBounds(allGraphs, boundTab, curGraphTab, lower = TRUE)
+  upperBounds = identifySubsumedBounds(allGraphs, boundTab, curGraphTab, lower = FALSE)
+  boundTab    = bind_rows(lowerBounds, upperBounds)
+  reducedTab  = boundTab %>%
+    inner_join(curGraphTab, by = join_by(graph == index, size == size)) %>%
+    mutate(n_embed = factorial(order)/n_auto, numConst = choose(support, order) * n_embed) %>%
+    arrange(numConst, order, size) %>%
+    select(-order, -n_auto)
+  ### TODO: eventually, we must pass the actual adj and orb objects to this function
+  allGraphOrb = lapply(allGraphs, getOrbits)
+  allGraphAdj = vector("list", length(allGraphs))
+  auxMatrix   = createPositionMatrix(support, TRUE)
+  initObjective = rep(0, choose(support, 2))
+  prep = prepareRamseyLP(support, allGraphs, allGraphAdj, allGraphOrb, reducedTab, curGraphTab, sparse = TRUE)
+  allGraphAdj = prep$adj
+  Map = prep$map[,1]
+  numVars  = ncol(prep$mat)
+  numConst = length(prep$dir)
+  numNonZeros = tail(prep$mat@p,1)
+  CN = paste0("X", 1:numVars)
+  envir = cplexAPI::openEnvCPLEX()
+  model = cplexAPI::initProbCPLEX(envir, pname = "Ramsey Polytope Optimisation")
+  cplexAPI::setIntParmCPLEX(envir, cplexAPI::CPXPARAM_Preprocessing_Presolve, 0)
+  print(paste("There are", numConst, "constraints over", numVars, "variables"))
+  for (ind in 1:nrow(reducedTab)) {
+    print(paste("Processing constraint", ind))
+    cplexAPI::copyLpwNamesCPLEX(env = envir, lp = model, nCols = numVars, nRows = numConst, lpdir = CPX_MIN, objf = rep(0, numVars), rhs = prep$rhs, sense = prep$dir, 
+    matbeg = prep$mat@p[1:numVars], matcnt = diff(prep$mat@p), matind = prep$mat@i, matval = rep(1, numNonZeros), lb = rep(0, numVars), ub = rep(1, numVars), cnames = CN)
+    curRow     = reducedTab %>% slice(ind)
+    curNumber  = curRow$number
+    curRange   = range(which(Map == curNumber))
+    cplexAPI::delRowsCPLEX(envir, model, curRange[1] - 1, curRange[2] - 1)
+    curIndex   = curRow$graph
+    curGraph   = allGraphs[[curIndex]]
+    curOrder   = max(curGraph)
+    curSize    = length(curGraph)/2
+    curEdges   = auxMatrix[matrix(curGraph, ncol = 2)]
+    curSense   = curRow$direction
+    curBound   = curRow$bound
+    curObjective = initObjective
+    redCNames = cplexAPI::getColNameCPLEX(envir, model, 0, numVars - 1) %>% 
+      str_remove("X") %>% 
+      as.integer()
+    curObjective[match(curEdges, redCNames)] = 1
+    cplexAPI::chgObjCPLEX(envir, model, ncols = numVars, ind = 0:(numVars - 1), val = curObjective)
+    cplexAPI::setObjDirCPLEX(envir, model, ifelse(curSense == "G", CPX_MIN, CPX_MAX))
+    cplexAPI::dualoptCPLEX(envir, model)
+    curObj = cplexAPI::solutionCPLEX(envir, model)$objval
+    if (near(curObj, curBound) || (curSense == "G" && curObj > curBound) || (curSense == "L" && curObj < curBound)) {
+      print("This constraint is redundant and will be eliminated!")
+      reducedTab$subsumed[ind] = TRUE
+    }
+  }
+  boundTab = reducedTab %>%
+    select()
+  boundTab
+}
+
 ### This function looks for tighter bounds on the number of red edges in a graph using currently available constraints.
 ### The Ramsey polytope is constructed over the specified order, numVertices; known bounds are provided via boundTab
 ### The output will contain information on all of the input graphs provided (allGraphs) that yield a non-trivial bound
@@ -314,7 +308,9 @@ tightenBounds = function(numVertices, allGraphs, allGraphAdj, allGraphOrb, bound
     boundU  = NULL
     curResult = NULL
     curObjective = initObjective
-    redCNames = cplexAPI::getColNameCPLEX(envir, model, 0, numVars - 1) %>% str_remove_all("X") %>% as.integer()
+    redCNames = cplexAPI::getColNameCPLEX(envir, model, 0, numVars - 1) %>% 
+      str_remove("X") %>% 
+      as.integer()
     curObjective[match(curEdges, redCNames)] = 1
     cplexAPI::chgObjCPLEX(envir, model, ncols = numVars, ind = 0:(numVars - 1), val = curObjective)
     numExtraConst = 0
@@ -402,306 +398,6 @@ tightenBounds = function(numVertices, allGraphs, allGraphAdj, allGraphOrb, bound
   finalOutput
 }
 
-### This function prepares to optimise over the Ramsey polytope with specified bounds
-prepareRamseyLP = function(numVertices, allGraphs, allGraphAdj, allGraphOrb, graphBounds, graphInfo, sparse = TRUE) {
-  numVars = choose(numVertices, 2)
-  auxMatrix = createPositionMatrix(numVertices = numVertices, symmetric = TRUE)
-  graphBounds %<>%
-    filter(!subsumed) %>%
-    inner_join(graphInfo, by = join_by(graph == index, size == size)) %>%
-    arrange(graph, direction) %>%
-    mutate(numOpts = choose(numVertices, order), numCombinations = n_embed * numOpts, fullCombinations = numCombinations * size)
-  numConstraints = sum(graphBounds$numCombinations)
-  Dir = rep("", numConstraints)
-  Rhs = rep(0,  numConstraints)
-  Map = matrix(0,  numConstraints, 3)
-  Mat = matrix(0, ifelse(sparse, sum(graphBounds$fullCombinations), numConstraints), ifelse(sparse, 2, numVars))
-  pos = 0
-  cnt = 0
-  uGraphs = unique(graphBounds$graph)
-  print(paste("There are", length(uGraphs), "graphs to prepare for the LP"))
-  for (iter in 1:length(uGraphs)) {
-    if (iter %% 10 == 0) { print(iter) }
-    ind = uGraphs[iter]
-    if (is.null(allGraphAdj[[ind]])) {
-      if (is.null(allGraphOrb[[ind]])) {
-        allGraphOrb[[ind]] = getOrbits(allGraphs[[ind]])
-      }
-      allGraphAdj[[ind]] = permuteGraph(allGraphs[[ind]], allGraphOrb[[ind]])
-      gc()
-    }
-    curGraphs = allGraphAdj[[ind]]
-    curInfo   = graphBounds %>%
-      filter(graph == ind)
-    curLength = nrow(curInfo)
-    stopifnot(curLength <= 2)
-    curSize   = curInfo$size[1]
-    curCombos = curInfo$numCombinations[1]
-    curNOpts  = curInfo$numOpts[1]
-    curNEmbed = curInfo$n_embed[1]
-    curNConst = curLength * curNOpts
-    curNEntry = curNConst * curSize
-    curNFull  = curLength * curCombos
-    Rhs[pos + (1:curNFull)]   = rep(curInfo$bound,        curCombos)
-    Dir[pos + (1:curNFull)]   = rep(curInfo$direction,    curCombos)
-    miniIndices = rep(1:curNOpts, each = curLength)
-    Map[pos + (1:curNFull), ] = cbind(rep(curInfo$number, curCombos), rep(1:curNEmbed, each = curNConst), rep(miniIndices, curNEmbed))
-    curOpts   = combn(1:numVertices, curInfo$order[1])
-    if (curNOpts == 1) {
-      curOpts = matrix(curOpts, ncol = 1)
-    }
-    if (curLength == 2) {
-      curOpts = curOpts[, miniIndices]
-    }
-    for (index in 1:ncol(curGraphs)) { ### This updated version processes all the combinations at once!
-      curBaseEdges = curGraphs[, index]
-      curPermEdges = curOpts[curBaseEdges, , drop = FALSE]
-      allPermEdges = auxMatrix[cbind(as.vector(curPermEdges[1:curSize, ]), as.vector(curPermEdges[curSize + (1:curSize), ]))]
-      curEntries = cbind(rep(pos + (1:curNConst), each = curSize), allPermEdges)
-      if (sparse) {
-        Mat[cnt + (1:curNEntry), ] = curEntries
-      } else {
-        Mat[curEntries] = 1
-      }
-      cnt = cnt + curNEntry
-      pos = pos + curNConst
-    }
-  }
-  if (sparse) {
-    Mat = sparseMatrix(i = Mat[, 1], j = Mat[, 2], x = 1, dims = c(numConstraints, numVars), index1 = TRUE)
-  }
-  output = list(mat = Mat, dir = Dir, rhs = Rhs, map = Map, adj = allGraphAdj)
-  output
-}
-
-### This function identifies, among a list of graphs together with their bounds, a set of non-subsumed ones
-### We say that a bound is subsumed if it is for a subgraph of a larger graph and is implied by its bound.
-### For instance, the bound X(K_4 - e) >= 2 is subsumed by the bound X(K_4) >= 3 because of three criteria:
-### a) K_4 - e is a subgraph of K_4 b) it has 1 less edge than K_4 and c) its bound is 1 less than for K_4.
-### Similarly, the bound X(K_3 + e) >= 1 is subsumed by the bound X(K_3) >= 1 because of three criteria:
-### a) K_3 + e is a supergraph of K_3 b) it has 1 more edge than K_3 and c) the bound is the same for K_3.
-### The opposite reasoning applies to the upper bounds; note that only comparable graphs can be subsuming.
-### Note that, for the purposes of an (I)LP a subsumed bound can only be tight if the subsuming one is too.
-identifySubsumedBounds = function(allGraphs, boundTab, graphInfo, lower = TRUE) {
-  boundTab %<>%
-    filter(direction == ifelse(lower, "G", "L")) %>%
-    group_by(graph) %>%
-    arrange(bound * ifelse(lower, -1, 1)) %>%
-    mutate(pos = row_number()) %>%
-    mutate(subsumed = subsumed | (pos != 1)) %>%
-    ungroup() %>%
-    select(-pos)
-  preSubsumed = boundTab %>%
-    filter(subsumed)
-  boundTab %<>%
-    filter(!subsumed)
-  L = nrow(boundTab)
-  if (L == 1) { 
-    output = bind_rows(preSubsumed, boundTab)
-    return(output)
-  }
-  fullTab = boundTab %>%
-    inner_join(graphInfo, by = join_by(graph == index, size == size)) %>%
-    arrange(order, size) %>%
-    mutate_at("bound", as.integer)
-  print(paste("There are", L, ifelse(lower, "lower", "upper"), "bounds to process"))
-  for (index in 1:L) {
-    if (index %% 100 == 0) { print(index) }
-    curRow      = fullTab %>% slice(index)
-    curGraph    = graph_from_edgelist(matrix(allGraphs[[curRow$graph]], ncol = 2), directed = FALSE)
-    if (lower) {
-      subsumedSuperCandidates = fullTab %>%
-        filter(number != curRow$number & order >= curRow$order & size >= curRow$size & (bound - curRow$bound >= size - curRow$size))
-      subsumedSubCandidates   = fullTab %>%
-        filter(number != curRow$number & order <= curRow$order & size <= curRow$size & (bound - curRow$bound >= 0))
-    } else {
-      subsumedSuperCandidates = fullTab %>%
-        filter(number != curRow$number & order >= curRow$order & size >= curRow$size & (curRow$bound - bound >= 0))
-      subsumedSubCandidates   = fullTab %>%
-        filter(number != curRow$number & order <= curRow$order & size <= curRow$size & (curRow$bound - bound >= curRow$size - size))
-    }
-    subsumedBySuper = sapply(allGraphs[subsumedSuperCandidates$graph], function(x) { subgraph_isomorphic(curGraph, graph_from_edgelist(matrix(x, ncol = 2), directed = FALSE)) })
-    subsumedBySub   = sapply(allGraphs[  subsumedSubCandidates$graph], function(x) { subgraph_isomorphic(graph_from_edgelist(matrix(x, ncol = 2), directed = FALSE), curGraph) })
-    fullTab$subsumed[index] = (any(subsumedBySuper) || any(subsumedBySub))
-  }
-  fullTab %<>% select(number, support, graph, direction, bound, round, subsumed, size)
-  output = bind_rows(preSubsumed, fullTab)
-  output
-}
-
-### This function constructs the proof of a lower bound over the Ramsey polytope
-### It makes use of the original LP as well as its dual variables at optimality
-### If lower = FALSE the funciton constructs the proof of an upper bound instead
-### If shortProofs = TRUE, only constructs a short proof version (with bound pointers)
-constructProof = function(LP, dualVariables, lower = TRUE, shortProofs = FALSE) {
-  goodRows   = which(!near(dualVariables, 0))
-  dualValues = dualVariables[goodRows]
-  dualValues = dualValues/min(abs(dualValues))
-  dir        = LP$dir[goodRows]
-  relInfo    = LP$map[goodRows, , drop = FALSE]
-  if (shortProofs) {
-    proof     = tibble(coeff = dualValues, constr = goodRows, dir = dir, bound = relInfo[,1], version = relInfo[,2], combo = relInfo[,3])
-  } else {
-    subMatrix = as.matrix(LP$mat[goodRows, , drop = FALSE])
-    rhs       = LP$rhs[goodRows]
-    proof     = cbind(coeff = dualValues, subMatrix, rhs = rhs)
-    flipRows  = which(dir == ifelse(lower, "L", "G"))
-    proof[flipRows, ] %<>% magrittr::multiply_by(-1)
-    proof %<>% cbind(bound = relInfo[,1])
-  }
-  proof
-}
-
-### This function computes the list of unique graphs isomorphic to a given graph
-### The return value is a 2m x p matrix (m: graph size, p: number of embeddings)
-### The input is both the graph itself, and the output of getOrbits applied to it;
-### however, if the latter is NULL, it is computed from scratch at the beginning.
-permuteGraph = function(Graph, orbits = NULL) {
-  Graph = matrix(Graph, ncol = 2)
-  if (is.null(orbits)) {
-    orbits = getOrbits(Graph)
-  }
-  n = orbits$n
-  autoSize = orbits$autoSize
-  if (autoSize > 1) {
-    if (autoSize == factorial(n)) {
-      allPerms = list(1:n)
-    } else {
-      goodComps = orbits$comps
-      if (n <= MAX_SIZE) {
-        allPerms = get(paste0("PERMS", n), envir = .GlobalEnv)
-      } else {
-        allPerms = permn(n)
-      }
-      for (ind in 1:nrow(goodComps)) {
-        curComp = goodComps[ind, ]
-        goodPerms = (map_int(allPerms, ~{.[curComp[1]]}) < map_int(allPerms, ~{.[curComp[2]]}))
-        allPerms = allPerms[goodPerms]
-      }
-    }
-  } else {
-    if (n <= MAX_SIZE) {
-      allPerms = get(paste0("PERMS", n), envir = .GlobalEnv)
-    } else {
-      allPerms = permn(n)
-    }
-  }
-  allPerms = matrix(unlist(allPerms), nrow = n)
-  allPerms = rbind(allPerms[Graph[, 1], , drop = FALSE], allPerms[Graph[, 2], , drop = FALSE])
-  allPerms
-}
-
-### This function computes a graph's full automorphism group from its generators,
-### as well as all vertex and non-trivial possible edge orbits under its action.
-### Note: for the edges, each orbit is listed in the format c(tailList, headList)
-### The group is not returned, only the lexicographic comparisons it entails are.
-getOrbits = function(Graph) {
-  Graph  = matrix(Graph, ncol = 2)
-  n = max(Graph)
-  iGraph = graph_from_edgelist(Graph, directed = FALSE)
-  autoGens = automorphism_group(iGraph)
-  autoSize = as.integer(automorphisms(iGraph)$group_size)
-  L = length(autoGens)
-  if (L == 0) { return(list(orbitsV = split(1:n, 1:n), orbitsE = c(), comps = matrix(NA, 0, 2), autoSize = autoSize, n = n)) }
-  if (autoSize == factorial(n)) { return(list(orbitsV = list(1:n), orbitsE = list(combn2(1:n)), comps = cbind(1:(n-1), 2:n), autoSize = autoSize, n = n)) }
-  autoGens %<>% do.call(rbind, .)
-  orbitsV = getMeet(autoGens)
-  permGroup = constructPermGroup(autoGens, autoSize, returnID = FALSE)
-  auxMatrix = createPositionMatrix(n, symmetric = TRUE)
-  fullEdges = combn2(1:n)
-  nC2 = nrow(fullEdges)
-  allEdges = cbind(rep(1:nC2, autoSize - 1), auxMatrix[cbind(as.vector(permGroup[fullEdges[, 1], ]), as.vector(permGroup[fullEdges[, 2], ]))])
-  auxG = graph_from_edgelist(allEdges, directed = FALSE)
-  orbitsE = split(fullEdges, clusters(auxG)$membership)
-  orbitsE = orbitsE[sapply(orbitsE, length) > 2]
-  comps = getComparisons(permGroup)
-  output = list(orbitsV = orbitsV, orbitsE = orbitsE, comps = comps, autoSize = autoSize, n = n)
-  output
-}
-
-### This function constructs a minimal set of constraints of the form s[a] < s[b]
-### that the lexicographically smallest element of a coset of its input satisfies
-### The input is the permutation group with one column per element minus identity
-### The output is a two-column matrix where a row [ab] corresponds to s[a] < s[b]
-getComparisons = function(permGroup) {
-  nr = nrow(permGroup)
-  nc = ncol(permGroup)
-  autoComp = apply(permGroup, 2, function(x) { min(which(x != 1:nr)) })
-  autoNext = permGroup[cbind(autoComp, 1:nc)]
-  goodComps = tibble(first = autoComp, second = autoNext) %>%
-    distinct()
-  # finalComps = getTransitiveReduction(as.matrix(goodComps))
-  finalComps = goodComps %>%
-    group_by(second) %>%
-    filter(first == max(first)) %>%
-    ungroup() %>%
-    arrange(first, second) %>%
-    as.matrix()
-  finalComps
-}
-
-### This function constructs a permutation group of given size from its generators
-### The construction works by an implicit breadth-first search of the Cayley graph
-### NOTE: The generators are specified by row, but the group is returned by column
-constructPermGroup = function(generatorList, numElts = NA, returnID = FALSE) {
-  n = ncol(generatorList)
-  L = nrow(generatorList)
-  if (is.na(numElts)) { numElts = factorial(n) }
-  allElts = matrix(NA, numElts, n)
-  allElts[1:(L + 1), ] = rbind(1:n, generatorList)
-  curActive = 2:(L + 1)
-  numActive = L
-  pos = L + 1
-  while (numActive > 0) {
-    newActive = c()
-    for (index in 1:L) {
-      nextElts = allElts[curActive, generatorList[index, , drop = FALSE], drop = FALSE]
-      badInds = which(duplicated(rbind(allElts[1:pos, ], nextElts))) - pos
-      if (length(badInds) < numActive) {
-        newPos = pos + (1:(numActive - length(badInds)))
-        allElts[newPos, ] = nextElts[setdiff(1:numActive, badInds), , drop = FALSE]
-        pos = tail(newPos, 1)
-        newActive = c(newActive, newPos)
-      }
-    }
-    curActive = newActive
-    numActive = length(curActive)
-  }
-  allElts = allElts[1:pos, , drop = FALSE]
-  if (!returnID) { allElts = allElts[-1, , drop = FALSE] }
-  allElts = t(allElts)
-  allElts
-}
-
-### This function converts a permutation in array notation to a graph representation
-permToGraph = function(perm, directed = TRUE) {
-  extPerm = cbind(1:length(perm), perm)
-  G = graph_from_edgelist(extPerm, directed = directed)
-  G
-}
-
-### This function computes the meet of the cycle partitions of a set of permutations
-getMeet = function(perms) {
-  Graphs = apply(perms, 1, permToGraph)
-  Union = do.call(igraph::union, Graphs)
-  Parts = split(1:vcount(Union), clusters(Union)$membership)
-  Parts
-}
-
-### This function creates a matrix M with M[i,j] being the edge position of (ij)
-### The edges are ordered as follows: 12, 13, ..., 1N, 23, ..., 2N, ..., (N-1)N
-### If symmetric = TRUE, the lower diagonal contains the same indices, reflected
-createPositionMatrix = function(numVertices, symmetric = TRUE) {
-  numPos = choose(numVertices, 2)
-  allPos = combn2(1:numVertices)
-  outMat = matrix(0, numVertices, numVertices)
-  outMat[allPos] = 1:numPos
-  if (symmetric) {
-    outMat[allPos[, 2:1]] = 1:numPos
-  }
-  outMat
-}
-
 ### This function constructs optimised proofs from the outputs of iterateLPProof
 ### If eps is non-NA, the 1 (-1) increment in objective value is replaced by eps.
 ### The objective is to identify proofs with a minimal number of dual variables.
@@ -711,15 +407,15 @@ optimiseProofs = function(output, eps = NA) {
   L = length(allGraphs)
   allGraphAdj = vector("list", L)
   allGraphOrb = vector("list", L)
-  r = as.integer((sqrt(allContradictions[[1]]$size[1] * 8 + 1) + 1)/2)
-  s = as.integer((sqrt(allContradictions[[1]]$size[2] * 8 + 1) + 1)/2)
+  r = invertNumPairs(allContradictions[[1]]$size[1])
+  s = invertNumPairs(allContradictions[[1]]$size[2])
   bestProof = prepareBestProof(allContradictions, allGraphs, r = r, s = s, fname = NULL, plotGraphs = TRUE) %>%
     mutate(subsumed = FALSE)
   M = nrow(bestProof)
   allProofs = vector("list", M)
   pos = 3
   maxIter = max(bestProof$step)
-  numAutos = sapply(allGraphs, function(x) { as.integer(automorphisms(graph_from_edgelist(matrix(x, ncol = 2), directed = FALSE))$group_size) })
+  numAutos = sapply(allGraphs, function(x) { as.integer(automorphisms(makeIgraph(x))$group_size) })
   graphTab = tibble(index = 1:L, size = sapply(allGraphs, length)/2, order = sapply(allGraphs, max), n_auto = numAutos, n_embed = factorial(order)/n_auto)
   for (ind in 2:maxIter) {
     prevBounds = bestProof %>%
@@ -747,7 +443,7 @@ optimiseProofs = function(output, eps = NA) {
     # cplexAPI::writeProbCPLEX(envir, model, fname = fname)
     cplexAPI::setIntParmCPLEX(envir, cplexAPI::CPXPARAM_Preprocessing_Presolve, 0)
     numBounds = nrow(curBounds)
-    numVerts = as.integer((sqrt(numVars * 8 + 1) + 1)/2)
+    numVerts = invertNumPairs(numVars)
     allPairs = combn2(1:numVerts)
     for (index in 1:numBounds) {
       curBound = curBounds %>% slice(index)
@@ -807,120 +503,84 @@ optimiseProofs = function(output, eps = NA) {
   output
 }
 
-### This function traces back through a list of short proofs to obtain contradictions
-reconstructContradictions = function(allProofs, boundTab) {
-  lastIter = max(boundTab$iter)
-  lastProofs = boundTab %>%
-    filter(iter == lastIter) %>%
-    group_by(graph) %>%
-    mutate(N = n()) %>%
-    filter(N == 2)
-  if (nrow(lastProofs) > 0) {
-    lastProofs %<>%
-      mutate(lower = max(bound * (direction == "G")), upper = max(bound * (direction == "L"))) %>%
-      filter(upper < lower) %>%
-      select(-N, -lower, -upper) %>%
-      ungroup
-  } else {
-    lastProofs %<>% 
-      select(-N) %>%
-      ungroup()
-  }
-  extraProofs = boundTab %>%
-    filter(iter == lastIter) %>%
-    filter((direction == "G" & bound == size) | (direction == "L" & bound == 0))
-  lastProofs %<>%
-    bind_rows(extraProofs)
-  uGraphs = sort(unique(lastProofs$graph))
-  numContradictions = length(uGraphs)
-  allContradictions = vector("list", numContradictions)
-  for (index in 1:numContradictions) {
-    curGraph = uGraphs[index]
-    curLastProof = lastProofs %>%
-      filter(graph == curGraph)
-    curIndices = curLastProof$number
-    allIndices = curIndices
-    contradiction = vector("list", lastIter)
-    pos = 1
-    contradiction[[pos]] = curLastProof
-    while (any(curIndices > 2)) {
-      pos = pos + 1
-      curIndices = setdiff(curIndices, 1:2)
-      if (length(curIndices) > 0) {
-        curProofs  = allProofs[curIndices]
-        curIndices = lapply(curProofs, function(x) {x$bound}) %>%
-          unlist() %>%
-          c() %>%
-          unique()
-        contradiction[[pos]] = boundTab %>%
-          slice(curIndices)
-        allIndices %<>% c(curIndices)
+### This function traces the chain of proofs based on the LPs in a given directory
+### The other inputs are r, s and n for which we are proving that Ramsey(r, s) >= n
+### It returns the list of graphs used (0-padded matrix, one graph per row), the
+### list of bounds (if simplifyBounds, it contains each bound's first occurrence), 
+### and additional graph information: order, size and the number of automorphisms.
+forensicTrace = function(Dir = "LPFilesForR3S4Auto6LowerOnly", r = 3, s = 3, n = 6, baseFilename = paste0("TempFileR", r, "S", s, "I"), simplifyBounds = FALSE) {
+  initDir = getwd()
+  setwd(Dir)
+  LF = list.files(pattern = baseFilename)
+  nC2 = choose(n, 2)
+  allGraphs = matrix(NA, nrow = 0, ncol = nC2 * 2)
+  graphPos = 1L
+  boundTab = tibble()
+  infoTab = tibble()
+  envir = cplexAPI::openEnvCPLEX()
+  model = cplexAPI::initProbCPLEX(envir, pname = "Ramsey Polytope")
+  L = length(LF)
+  print(paste("There are", L, "iterations to process"))
+  curCount = 1L
+  for (iter in 1:L) {
+    curFile = paste0(baseFilename, iter, ".lp")
+    cplexAPI::readCopyProbCPLEX(envir, model, fname = curFile)
+    numVars = cplexAPI::getNumColsCPLEX(envir, model)
+    numVerts = invertNumPairs(numVars)
+    print(paste("Currently processing iteration", iter, "with", numVerts, "vertices in the support"))
+    auxMatrix = createPositionMatrix(numVerts, symmetric = FALSE)
+    curNames = cplexAPI::getColNameCPLEX(envir, model, 0, numVars - 1) %>%
+      str_remove("X") %>%
+      as.integer()
+    curTotal = 0
+    numConst = cplexAPI::getNumRowsCPLEX(envir, model)
+    while (curTotal < numConst) {
+      curRow = curNames[cplexAPI::getRowsCPLEX(envir, model, curTotal, curTotal)$matind + 1]
+      curDir = cplexAPI::getSenseCPLEX(envir, model, curTotal, curTotal)
+      curRhs = cplexAPI::getRhsCPLEX(envir, model, curTotal, curTotal)
+      curGraph = which(matrix(auxMatrix %in% curRow, nrow = numVerts), arr.ind = TRUE) %>%
+        as_tibble() %>%
+        arrange(row, col) %>%
+        as.matrix()
+      allGraphs = rbind(allGraphs, as.vector(fillWithZeros(curGraph, nC2)))
+      prevPos = which(duplicated(allGraphs, fromLast = TRUE))
+      if (length(prevPos) == 0) {
+        prevPos = graphPos
+        curNumAutos = as.integer(automorphisms(makeIgraph(curGraph))$group_size)
+        curInfo = tibble(graph = graphPos, order = max(curGraph), size = nrow(curGraph), n_auto = curNumAutos)
+        infoTab %<>% bind_rows(curInfo)
+        graphPos = graphPos + 1L
+      } else {
+        allGraphs = allGraphs[1:(graphPos - 1), , drop = FALSE] 
+        curInfo = infoTab %>% slice(prevPos)
       }
-    }
-    contradiction %<>% rev
-    contradiction = contradiction[!sapply(contradiction, is.null)]
-    contradiction %<>% 
-      do.call(bind_rows, .) %>%
-      distinct() %>%
-      arrange(iter) %>%
-      group_by(iter) %>%
-      mutate(step = cur_group_id()) %>%
-      ungroup()
-    allContradictions[[index]] = contradiction
-  }
-  allContradictions
-}
-
-### This function prepares the proof of a contradiction using the fewest graphs and iterations.
-### The first input is the list of contradictions, the second, the list of all the graphs used.
-### The labels are used to create a file with each relevant graph; the special labels are used
-### for the two starting graphs (which can also be identical); the best proof is saved in fname.
-### If plotGraphs = TRUE, the graphs are also plotted into PDF files, each named as [label].pdf
-prepareBestProof = function(contradictions, listOfGraphs, labels = LETTERS, r = 3, s = 4, specialLabels = (if (r != s) { c("Z", "X") } else { "X" }), 
-                            fname = paste0("ShortProofR", r, "S", s, ".RData"), plotGraphs = FALSE) {
-  endpoint = 1 + (r != s)
-  numGraphs = sapply(contradictions, function(x) { n_distinct(x$graph) })
-  numBounds = sapply(contradictions, nrow)
-  numSteps  = sapply(contradictions, function(x) { n_distinct(x$iter) })
-  contraTab = tibble(index = 1:length(contradictions), use = numGraphs, bounds = numBounds, steps = numSteps) %>%
-    arrange(use, bounds, steps)
-  bestProof = contraTab$index[1]
-  bestContradiction = contradictions[[bestProof]]
-  bestSize = numGraphs[bestProof]
-  stopifnot(length(specialLabels) == endpoint)
-  usableLabels = setdiff(labels, specialLabels)
-  if (bestSize > length(usableLabels) + endpoint) { print("Not enough labels!"); return() }
-  uGraphs = sort(unique(bestContradiction$graph))
-  firstGraphs = bestContradiction %>%
-    slice(1:endpoint) %>%
-    pull(graph)
-  nameTab = tibble(index = setdiff(uGraphs, firstGraphs), label = usableLabels[1:(bestSize - endpoint)]) %>%
-    bind_rows(tibble(index = firstGraphs, label = specialLabels)) %>%
-    arrange(index)
-  bestContradiction %<>%
-    inner_join(nameTab, by = join_by(graph == index))
-  miniContradiction = bestContradiction %>%
-    filter(step > 1) %>%
-    mutate(summary = paste0("X[", label, "] \\", tolower(direction), "eq ", bound)) %>%
-    arrange(step, label) %>%
-    group_by(step) %>%
-    mutate(fullSummary = paste0("$", paste(summary, collapse = ", "), "$")) %>%
-    slice(1) %>%
-    ungroup()
-  if (plotGraphs) {
-    allGraphObj = sapply(listOfGraphs, function(x) {graph_from_edgelist(x, directed = FALSE)})
-    for (ind in 1:nrow(nameTab)) {
-      curRow = nameTab %>%
-        slice(ind)
-      curGraph = allGraphObj[[curRow$index]]
-      curLabel = curRow$label
-      pdf(paste0(curLabel, ".pdf"))
-      plot(curGraph)
-      dev.off()
+      boundTab %<>% bind_rows(tibble(graph = prevPos, direction = curDir, bound = curRhs, round = iter, support = numVerts, number = curCount))
+      curCount = curCount + 1L
+      doubled = FALSE
+      if (curTotal + 1 < numConst) {
+        nextRow = curNames[cplexAPI::getRowsCPLEX(envir, model, curTotal + 1, curTotal + 1)$matind + 1]
+        if (all(curRow == nextRow)) {
+          doubled = TRUE
+          nextDir = cplexAPI::getSenseCPLEX(envir, model, curTotal + 1, curTotal + 1)
+          nextRhs = cplexAPI::getRhsCPLEX(envir, model, curTotal + 1, curTotal + 1)
+          boundTab %<>% bind_rows(tibble(graph = prevPos, direction = nextDir, bound = nextRhs, round = iter, support = numVerts, number = curCount))
+          curCount = curCount + 1L
+        }
+      }
+      curNumConst = (factorial(numVerts) / (factorial(numVerts - curInfo$order) * curInfo$n_auto)) * (1 + doubled)
+      curTotal = curTotal + curNumConst
     }
   }
-  if (!is.null(fname)) {
-    save(bestContradiction, miniContradiction, file = fname)
+  allGraphs = allGraphs[1:(graphPos - 1), , drop = FALSE]
+  boundTab %<>%
+    mutate(subsumed = FALSE, size = infoTab$size[graph])
+  if (simplifyBounds) {
+    boundTab = boundTab %>%
+      group_by(graph, direction, bound) %>%
+      filter(iter == min(iter)) %>%
+      ungroup
   }
-  bestContradiction
+  setwd(initDir)
+  output = list(allGraphs = allGraphs, boundTab = boundTab, graphInfo = infoTab)
+  output
 }
