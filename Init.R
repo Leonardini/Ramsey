@@ -8,10 +8,10 @@ source("Ramsey.R")
 # ResU = optimiseProofs(Qu[[2]])
 # save(ResU, file = "OptimisedProofsR3S4MinimalExtreme.RData")
 
-# W = iterateLPProof(n = 9L, r = 3L, s = 4L, maxOrder = 8L, minAuto = 6L, lowerOnly = TRUE)
-# save(W, file = "ProofR4S3Auto6LowerOnly.RData")
-# Qw = findMinimalGraphSet(maxOrder = 8L, minAuto = 6L, lowerOnly = TRUE, inds = c())
-# save(Qw, file = "ResultsR3S4MinimalAuto6.RData")
+W = iterateLPProof(n = 9L, r = 3L, s = 4L, maxOrder = 8L, minAuto = 12L, lowerOnly = TRUE, strongCuts = TRUE)
+save(W, file = "ProofR4S3Auto12LowerOnly.RData")
+# Qw = findMinimalGraphSet(maxOrder = 8L, minAuto = 12L, lowerOnly = TRUE, inds = c())
+# save(Qw, file = "ResultsR3S4MinimalAuto12.RData")
 
 # X = iterateLPProof(n = 9L, r = 3L, s = 4L, maxOrder = 8L, treesOnly = TRUE)
 # save(X, file = "ProofR4S3Trees.RData")
@@ -43,3 +43,6 @@ source("Ramsey.R")
 # save(Z, file = "ProofR5S3TreesOnly.RData")
 # Z = iterateLPProof(n = 18L, r = 4L, s = 4L, maxOrder = 12L, twoTreesOnly = TRUE)
 # save(Z, file = "ProofR4S4TwoTreesOnly.RData")
+
+# n = 9L; r = 3L; s = 4L; maxOrder = 8L; minAuto = 12L; lowerOnly = TRUE; strongCuts = TRUE; eps = NA; symRS = FALSE; shortProofs = TRUE;
+# extremeOnly = FALSE; treesOnly = FALSE; twoTreesOnly = FALSE; ETOnly = FALSE; partiteOnly = FALSE; completeOnly = FALSE; inds = NULL
