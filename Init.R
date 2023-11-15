@@ -8,10 +8,22 @@ source("Ramsey.R")
 # ResU = optimiseProofs(Qu[[2]])
 # save(ResU, file = "OptimisedProofsR3S4MinimalExtreme.RData")
 
-W = iterateLPProof(n = 9L, r = 3L, s = 4L, maxOrder = 8L, minAuto = 12L, lowerOnly = TRUE, strongCuts = TRUE)
-save(W, file = "ProofR4S3Auto12LowerOnly.RData")
-# Qw = findMinimalGraphSet(maxOrder = 8L, minAuto = 12L, lowerOnly = TRUE, inds = c())
-# save(Qw, file = "ResultsR3S4MinimalAuto12.RData")
+# Qv = findMinimalGraphSet(extremeOnly = TRUE, inds = c(5, 10, 11, 15, 22, 24, 29, 30)) # The original set leading to contradiction being lost we simply add 30 at the end
+# save(Qv, file = "ResultsR3S4MinimalExtremeOnlyInitial.RData")
+# load("ResultsR3S4MinimalExtremeOnlyInitial.RData")
+# ResV = optimiseProofs(Qv[[2]])
+# save(ResV, file = "OptimisedProofsR3S4MinimalExtremeInitial.RData")
+
+# W = iterateLPProof(n = 9L, r = 3L, s = 4L, maxOrder = 8L, minAuto = 24L, lowerOnly = TRUE, strongCuts = TRUE)
+# save(W, file = "ProofR4S3Auto24LowerOnly.RData")
+# Qw = findMinimalGraphSet(maxOrder = 8L, minAuto = 24L, lowerOnly = TRUE, inds = c(3,4,5,6,7,8,9,10,12,13,14,15,25,28,34,35,37,38,39,42,44,48,49,50,52,55,56,58,60,
+#                                                                                    61,65,67,69,70,74,75,79,81,84,89,90,94,96,98,100,103,107,110,114,115,116,118,119,
+#                                                                                    120,122,126,128,129,130,133,134,137,144,149,150,151,152,154,155,156,162,163,165,168,
+#                                                                                    172,174,176,183,184,190,194,198,202,204,217,218,220,221,223,226,227,236,237,240,242,
+#                                                                                    246,248,250,253,258,266,283,289,290,300,302,310,312,318,323,334,338,341))
+# save(Qw, file = "ResultsR3S4MinimalAuto24LowerOnly.RData")
+# ResW = optimiseProofs(Qw[[2]])
+# save(ResW, file = "OptimisedProofsR3S4MinimalAuto24LowerOnly.RData")
 
 # X = iterateLPProof(n = 9L, r = 3L, s = 4L, maxOrder = 8L, treesOnly = TRUE)
 # save(X, file = "ProofR4S3Trees.RData")
@@ -43,6 +55,3 @@ save(W, file = "ProofR4S3Auto12LowerOnly.RData")
 # save(Z, file = "ProofR5S3TreesOnly.RData")
 # Z = iterateLPProof(n = 18L, r = 4L, s = 4L, maxOrder = 12L, twoTreesOnly = TRUE)
 # save(Z, file = "ProofR4S4TwoTreesOnly.RData")
-
-# n = 9L; r = 3L; s = 4L; maxOrder = 8L; minAuto = 12L; lowerOnly = TRUE; strongCuts = TRUE; eps = NA; symRS = FALSE; shortProofs = TRUE;
-# extremeOnly = FALSE; treesOnly = FALSE; twoTreesOnly = FALSE; ETOnly = FALSE; partiteOnly = FALSE; completeOnly = FALSE; inds = NULL

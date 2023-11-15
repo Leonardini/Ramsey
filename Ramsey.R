@@ -16,6 +16,9 @@ source("Ramsey/Utilities.R")
 
 ### TODO: For lower bounds consider implementing a version that looks for cyclic orientations too; the idea is to only constrain delta vectors which admit a bipartition!
 ### TODO: Explore the use of DFS instead of BFS in searching for the proof, so that as soon as a new tighter bound is found, it is immediately added to the constraints.
+### TODO: Consider adding a global variable tracking subgraph relationships, to be created once at the start; it can be a sparse matrix or a tibble, depending on needs.
+### TODO: Write an algorithm that spreads the bound density to support n-1 then tries to increase or keep the density in all future rounds; in order to do so it needs to
+### keep a best bound tab on all the graphs, and for a lower bound t, add the corresponding lower bounds to all subgraphs with < t edges removed and all supergraphs, too
 
 ### This function iteratively constructs a minimal set of graphs sufficient for a proof
 ### that Ramsey(r, s) <= n; all of its other arguments are exactly as in iterateLPProof
@@ -25,24 +28,25 @@ findMinimalGraphSet = function(n = 9L, r = 3L, s = 4L, maxOrder = 6L, symRS = FA
   endpoint = ifelse(r == s, 1, 2)
   inds = sort(setdiff(inds, (1:endpoint)))
   L = length(inds)
+  dispensable = rep(NA, L)
   print(paste("There are", L, "indices to process"))
-  pos = L
-  while (pos >= 1) {
-    print(pos)
-    altInds = inds[-pos]
+  while (any(is.na(dispensable))) {
+    curInds = inds[which(is.na(dispensable) | !(dispensable))]
+    testElement = inds[max(which(is.na(dispensable)))]
+    altInds = setdiff(curInds, testElement)
     altRes  = iterateLPProof(n = n, r = r, s = s, maxOrder = maxOrder, symRS = symRS, shortProofs = shortProofs, lowerOnly = lowerOnly, minAuto = minAuto, eps = eps, inds = altInds,
               extremeOnly = extremeOnly, treesOnly = treesOnly, twoTreesOnly = twoTreesOnly, ETOnly = ETOnly, partiteOnly = partiteOnly, completeOnly = completeOnly, strongCuts = strongCuts)
     if (length(altRes) > 1) {
-      print(paste("Removing", inds[pos], "leaves the contradiction valid"))
+      print(paste("Removing", testElement, "leaves the contradiction valid"))
       lastSolution = altRes
-      bestSolution = prepareBestProof(altRes[[4]], altRes[[3]], labels = c(LETTERS, letters), plotGraphs = FALSE)
-      inds = altInds[sort(unique(setdiff(bestSolution$graph, (1:endpoint)))) - endpoint]
-      pos = length(inds)
+      bestSolution = prepareBestProof(altRes[[4]], altRes[[3]], labels = outer(LETTERS, letters, paste0), r = r, s = s, plotGraphs = FALSE)
+      newInds = altInds[sort(unique(setdiff(bestSolution$graph, (1:endpoint)))) - endpoint]
+      dispensable[match(setdiff(curInds, newInds), inds)] = TRUE
     } else {
-      pos = pos - 1
+      dispensable[match(testElement, inds)] = FALSE
     }
   }
-  output = list(inds = inds, last = lastSolution)
+  output = list(inds = inds[which(!dispensable)], last = lastSolution)
   output
 }
 
@@ -129,7 +133,15 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = round(2 * n / 3), sy
       filter(order >= min(r, s) & order <= curOrder)
     print(paste("Exploring graphs on up to", curOrder, "vertices with support size", curSupport))
     boundTab = findAllSubsumed(allGraphs, boundTab, curGraphTab)
-    if (strongCuts) {
+    dRange = boundTab %>% mutate(density = bound/size) %>% group_by(direction) %>% 
+      mutate(opt = ifelse(direction == "G", max(density), min(density))) %>% slice(1) %>% ungroup
+    print(paste("The edge density is currently between", dRange$opt[1], "and", dRange$opt[2]))
+    if ((near(dRange$opt[1], dRange$opt[2]) && !near(choose(n,2) * dRange$opt[1], round(choose(n,2) * dRange$opt[1]))) || (dRange$opt[1] > dRange$opt[2])) {
+      print(paste("Contradiction identified based on edge density!"))
+      contradict = TRUE
+      break
+    }
+    if (strongCuts && (dRange$opt[1] + 1 <= 2 * dRange$opt[2])) {
       eliminationResult = eliminateRedundantBounds(allGraphs, boundTab, curGraphTab, curSupport, allGraphAdj, allGraphOrb)
       boundTab = eliminationResult[[1]]
       allGraphAdj = eliminationResult[[2]]
@@ -194,10 +206,9 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = round(2 * n / 3), sy
   proofs = proofs[1:nrow(boundTab)]
   contradictions = NULL
   if (contradict) {
-    contradictions = reconstructContradictions(proofs, boundTab)
+    contradictions = reconstructContradictions(proofs, boundTab, n)
   }
-  firstGraphs = lapply(allGraphs, function(x) { matrix(x, ncol = 2) })
-  output = list(proofs = proofs, boundTab = boundTab, graphs = firstGraphs, contradictions = contradictions)
+  output = list(proofs = proofs, boundTab = boundTab, graphs = allGraphs, contradictions = contradictions)
   output
 }
 
@@ -602,7 +613,8 @@ forensicTrace = function(Dir = "LPFilesForR3S4Auto6LowerOnly", r = 3, s = 3, n =
       ungroup
   }
   infoTab %<>%
-    rename(index = graph)
+    rename(index = graph) %>%
+    mutate(n_embed = factorial(order)/n_auto)
   setwd(initDir)
   output = list(allGraphs = allGraphs, boundTab = boundTab, graphInfo = infoTab)
   output

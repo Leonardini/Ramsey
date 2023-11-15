@@ -48,6 +48,7 @@ getGraphs = function(numVerts = 2, extremeOnly = FALSE, treesOnly = FALSE, twoTr
         curX = curText[[index]] %>%
           str_split("  ") %>%
           unlist() %>%
+          str_split_fixed(" ", n = 2)
           mode(curX) = "integer"
           tails = curX[,1] %>%
             matrix(nrow = curCounts)
@@ -392,7 +393,7 @@ invertNumPairs = function(numPairs) {
 }
 
 ### This function traces back through a list of short proofs to obtain contradictions
-reconstructContradictions = function(allProofs, boundTab) {
+reconstructContradictions = function(allProofs, boundTab, n) {
   lastIter = max(boundTab$iter)
   lastProofs = boundTab %>%
     filter(iter == lastIter) %>%
@@ -406,15 +407,41 @@ reconstructContradictions = function(allProofs, boundTab) {
       select(-N, -lower, -upper) %>%
       ungroup
   } else {
-    lastProofs %<>% 
+    lastProofs %<>%
       select(-N) %>%
       ungroup()
   }
+  # extraProofs = boundTab %>%
+  #   filter(iter == lastIter) %>%
+  #   filter((direction == "G" & bound == size) | (direction == "L" & bound == 0))
+  ### Changing the entire process to a more general expression involving density
   extraProofs = boundTab %>%
     filter(iter == lastIter) %>%
-    filter((direction == "G" & bound == size) | (direction == "L" & bound == 0))
-  lastProofs %<>%
-    bind_rows(extraProofs)
+    mutate(density = bound/size) %>% 
+    group_by(direction) %>%
+    mutate(opt = ifelse(direction == "G", max(density), min(density))) %>%
+    filter(near(opt, density)) %>%
+    ungroup %>%
+    arrange(direction)
+  w = nrow(extraProofs)
+  expectedMinSize = extraProofs$opt[1] * choose(n, 2)
+  if (near(extraProofs$opt[1], 1)) {
+    lastProofs %<>%
+      bind_rows(extraProofs %>% 
+                  select(-density, -opt) %>% 
+                  filter(direction == "G"))
+  }
+  if (near(extraProofs$opt[w], 0)) {
+    lastProofs %<>%
+      bind_rows(extraProofs %>% 
+                  select(-density, -opt) %>% 
+                  filter(direction == "L"))
+  }
+  if ((extraProofs$opt[1] > extraProofs$opt[w]) || (near(extraProofs$opt[1], extraProofs$opt[w]) && !near(expectedMinSize, round(expectedMinSize)))) {
+    lastProofs %<>%
+      bind_rows(extraProofs %>% 
+                  select(-density, -opt))
+  }
   uGraphs = sort(unique(lastProofs$graph))
   numContradictions = length(uGraphs)
   allContradictions = vector("list", numContradictions)
@@ -460,7 +487,7 @@ reconstructContradictions = function(allProofs, boundTab) {
 ### The labels are used to create a file with each relevant graph; the special labels are used
 ### for the two starting graphs (which can also be identical); the best proof is saved in fname.
 ### If plotGraphs = TRUE, the graphs are also plotted into PDF files, each named as [label].pdf
-prepareBestProof = function(contradictions, listOfGraphs, labels = LETTERS, r = 3, s = 4, specialLabels = (if (r != s) { c("Z", "X") } else { "X" }), 
+prepareBestProof = function(contradictions, listOfGraphs, labels = outer(LETTERS, letters, paste0), r = 3, s = 4, specialLabels = (if (r != s) { c("Zz", "Xx") } else { "Xx" }), 
                             fname = paste0("ShortProofR", r, "S", s, ".RData"), plotGraphs = FALSE) {
   endpoint = 1 + (r != s)
   numGraphs = sapply(contradictions, function(x) { n_distinct(x$graph) })
