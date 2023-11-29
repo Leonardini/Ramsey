@@ -55,3 +55,14 @@ source("Ramsey.R")
 # save(Z, file = "ProofR5S3TreesOnly.RData")
 # Z = iterateLPProof(n = 18L, r = 4L, s = 4L, maxOrder = 12L, twoTreesOnly = TRUE)
 # save(Z, file = "ProofR4S4TwoTreesOnly.RData")
+
+# noMult3 = iterateLPProof(n = 6L, r = 3L, s = 3L, maxOrder = 5L, inds = c(2, 3, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 23, 24, 25, 26, 27, 28, 30))
+# mult6 = iterateLPProof(n = 6L, r = 3L, s = 3L, maxOrder = 5L, minAuto = 6, factor = TRUE)
+
+# T = iterateLPProof(n = 9L, r = 3L, s = 4L, maxOrder = 8L, minAuto = 24L, factor = TRUE)
+# save(T, file = "ProofR4S3MinimalAuto24Factor.RData")
+Qt = findMinimalGraphSet(maxOrder = 8L, minAuto = 24L, factor = TRUE, inds = c(3,4,5,7,11,12,13,20,23,35,37,39,41,42,44,46,48,49,50,51,52,59,68,69,82,86,93,95,101,102,
+                                                                               104,107,109,114,119,121,122,123,124,128,139,143,145,152,159,166,170,171,181,189,197,198,
+                                                                               204,209,210,216,219,223,227,231,236,240,247,253,257,261,262,266,270,275,276,282,284,286,
+                                                                               288,291,292,294,296,299,302))
+save(Qt, file = "ResultsR3S4MinimalAuto24Factor.RData")

@@ -12,6 +12,7 @@ library(tidyverse)
 CPLEX_DIR = "/Applications/CPLEX_Studio201/cplex/bin/x86-64_osx/"
 WORK_DIR  = "/Users/lchindelevitch/Downloads/NonPriority/Conjectures/RamseyNumbers"
 setwd(WORK_DIR)
+EPSILON = .Machine$double.eps^0.5 # Tolerance for deciding if two floating-point numbers are equal
 source("Ramsey/Utilities.R")
 
 ### TODO: For lower bounds consider implementing a version that looks for cyclic orientations too; the idea is to only constrain delta vectors which admit a bipartition!
@@ -22,7 +23,7 @@ source("Ramsey/Utilities.R")
 
 ### This function iteratively constructs a minimal set of graphs sufficient for a proof
 ### that Ramsey(r, s) <= n; all of its other arguments are exactly as in iterateLPProof
-findMinimalGraphSet = function(n = 9L, r = 3L, s = 4L, maxOrder = 6L, symRS = FALSE, shortProofs = TRUE, lowerOnly = FALSE, minAuto = NULL, eps = NA, strongCuts = FALSE,
+findMinimalGraphSet = function(n = 9L, r = 3L, s = 4L, maxOrder = 6L, symRS = FALSE, lowerOnly = FALSE, minAuto = NULL, factor = FALSE, eps = NA, strongCuts = FALSE,
                       extremeOnly = FALSE, treesOnly = FALSE, twoTreesOnly = FALSE, ETOnly = FALSE, partiteOnly = FALSE, completeOnly = FALSE, inds = NULL) {
   lastSolution = NULL
   endpoint = ifelse(r == s, 1, 2)
@@ -34,8 +35,8 @@ findMinimalGraphSet = function(n = 9L, r = 3L, s = 4L, maxOrder = 6L, symRS = FA
     curInds = inds[which(is.na(dispensable) | !(dispensable))]
     testElement = inds[max(which(is.na(dispensable)))]
     altInds = setdiff(curInds, testElement)
-    altRes  = iterateLPProof(n = n, r = r, s = s, maxOrder = maxOrder, symRS = symRS, shortProofs = shortProofs, lowerOnly = lowerOnly, minAuto = minAuto, eps = eps, inds = altInds,
-              extremeOnly = extremeOnly, treesOnly = treesOnly, twoTreesOnly = twoTreesOnly, ETOnly = ETOnly, partiteOnly = partiteOnly, completeOnly = completeOnly, strongCuts = strongCuts)
+    altRes  = iterateLPProof(n = n, r = r, s = s, maxOrder = maxOrder, symRS = symRS, lowerOnly = lowerOnly, minAuto = minAuto, factor = factor, eps = eps, strongCuts = strongCuts, 
+    extremeOnly = extremeOnly, treesOnly = treesOnly, twoTreesOnly = twoTreesOnly, ETOnly = ETOnly, partiteOnly = partiteOnly, completeOnly = completeOnly, inds = altInds)
     if (length(altRes) > 1) {
       print(paste("Removing", testElement, "leaves the contradiction valid"))
       lastSolution = altRes
@@ -54,10 +55,10 @@ findMinimalGraphSet = function(n = 9L, r = 3L, s = 4L, maxOrder = 6L, symRS = FA
 ### Search parameters (apply to the LPs and the corresponding proofs):
 ### maxOrder determines the largest order of the graphs that will be considered.
 ### If symRS = TRUE, only lower bounds are computed, the upper bounds being symmetric.
-### If shortProofs = TRUE, only produces the shortened (not full) version of proofs.
 ### If lowerOnly = TRUE, no upper, bounds are computed (this is regardless of symRS).
 ### Graph selection parameters (Kr and Ks are considered essential and put 1st/2nd):
 ### If minAuto is not NULL, it is a lower bound on the automorphism group size.
+### If factor = TRUE, we only allow automorphism groups with size divisible by minAuto.
 ### If eps is not NA, the current bound needs to be tightened by at least eps to count.
 ### If extremeOnly = TRUE, only keeps the graphs with sizes within 1 of min/max.
 ### If treesOnly = TRUE, only keeps the graphs with size equal to the order - 1.
@@ -67,8 +68,9 @@ findMinimalGraphSet = function(n = 9L, r = 3L, s = 4L, maxOrder = 6L, symRS = FA
 ### If completeOnly = TRUE, only keeps the complete and complete bipartite graphs.
 ### If inds is not NULL, only keeps the non-essential graphs whose numbers are in inds.
 ### If strongCuts = TRUE, only keeps the bounds that are non-redundant in each LP.
-iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = round(2 * n / 3), symRS = (r == s), shortProofs = TRUE, lowerOnly = FALSE, minAuto = NULL, eps = NA,
-                 extremeOnly = FALSE, treesOnly = FALSE, twoTreesOnly = FALSE, ETOnly = FALSE, partiteOnly = FALSE, completeOnly = FALSE, inds = NULL, strongCuts = TRUE) {
+iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = round(2 * n / 3), symRS = (r == s), lowerOnly = FALSE, minAuto = NULL, factor = FALSE, eps = NA, strongCuts = TRUE,
+                 extremeOnly = FALSE, treesOnly = FALSE, twoTreesOnly = FALSE, ETOnly = FALSE, partiteOnly = FALSE, completeOnly = FALSE, inds = NULL) {
+  possibleEdges = choose(n, 2)
   allGraphs = list(as.vector(combn2(1:r)))
   if (r !=s ) {
     allGraphs %<>% c(list(as.vector(combn2(1:s))))
@@ -92,7 +94,10 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = round(2 * n / 3), sy
     if (extremeOnly) { 
       goodGraphs = (goodGraphs & (graphTab$size <= graphTab$order) | graphTab$size >= (choose(graphTab$order, 2) - 1)) 
     }
-    goodGraphs   = (goodGraphs & (graphTab$n_auto >= ifelse(is.null(minAuto), 1, minAuto))) 
+    goodGraphs   = (goodGraphs & (graphTab$n_auto >= ifelse(is.null(minAuto), 1, minAuto)))
+    if (factor && !is.null(minAuto)) {
+      goodGraphs   = (goodGraphs & (graphTab$n_auto %% minAuto == 0))
+    }
     goodGraphs   = sort(unique(c(1:endpoint, which(goodGraphs))))
   } else {
     numAutos = unique(c(factorial(r), factorial(s)))
@@ -136,7 +141,7 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = round(2 * n / 3), sy
     dRange = boundTab %>% mutate(density = bound/size) %>% group_by(direction) %>% 
       mutate(opt = ifelse(direction == "G", max(density), min(density))) %>% slice(1) %>% ungroup
     print(paste("The edge density is currently between", dRange$opt[1], "and", dRange$opt[2]))
-    if ((near(dRange$opt[1], dRange$opt[2]) && !near(choose(n,2) * dRange$opt[1], round(choose(n,2) * dRange$opt[1]))) || (dRange$opt[1] > dRange$opt[2])) {
+    if (ceiling(dRange$opt[1] * possibleEdges) > floor(dRange$opt[2] * possibleEdges)) {
       print(paste("Contradiction identified based on edge density!"))
       contradict = TRUE
       break
@@ -149,7 +154,7 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = round(2 * n / 3), sy
     }
     curRound     = curRound + 1
     finalResult  = tightenBounds(numVertices = curSupport, allGraphs = allGraphs, allGraphAdj = allGraphAdj, allGraphOrb = allGraphOrb, boundTab = boundTab, 
-                   graphInfo = curGraphTab, nRound = paste0("R", r, "S", s, "I", curRound), symRS = symRS, shortProofs = shortProofs, eps = eps, lowerOnly = lowerOnly)
+                   graphInfo = curGraphTab, nRound = paste0("R", r, "S", s, "I", curRound), symRS = symRS, eps = eps, lowerOnly = lowerOnly)
     fullResult  = finalResult[[1]]
     allGraphAdj = finalResult[[2]]
     allGraphOrb = finalResult[[3]]
@@ -274,7 +279,7 @@ eliminateRedundantBounds = function(allGraphs, boundTab, curGraphTab, support, a
       cplexAPI::setObjDirCPLEX(envir, model, ifelse(curSense == "G", CPX_MIN, CPX_MAX))
       cplexAPI::dualoptCPLEX(envir, model)
       curObj = cplexAPI::solutionCPLEX(envir, model)$objval
-      if (near(curObj, curBound) || (curSense == "G" && curObj > curBound) || (curSense == "L" && curObj < curBound)) {
+      if (near(curObj, curBound, tol = EPSILON) || (curSense == "G" && curObj > curBound) || (curSense == "L" && curObj < curBound)) {
         print(paste("Bound", ind, "is redundant and will be eliminated!"))
         pos = which(boundTab$number == ind)
         boundTab$subsumed[pos] = TRUE
@@ -294,10 +299,10 @@ eliminateRedundantBounds = function(allGraphs, boundTab, curGraphTab, support, a
 ### The allGraphOrb variable contains all the information about the orbits of each graph's automorphism group
 ### that also contain relevant information in graphInfo (in particular, whose indices are contained in its first column).
 ### If eps is specified (ie, not NA), the function looks for an improvement over the best existing bound by at least eps.
-tightenBounds = function(numVertices, allGraphs, allGraphAdj, allGraphOrb, boundTab, graphInfo, nRound = 0, symRS = FALSE, shortProofs = TRUE, eps = NA, lowerOnly = FALSE) {
+tightenBounds = function(numVertices, allGraphs, allGraphAdj, allGraphOrb, boundTab, graphInfo, nRound = 0, symRS = FALSE, eps = NA, lowerOnly = FALSE) {
   prep = prepareRamseyLP(numVertices = numVertices, allGraphs = allGraphs, allGraphAdj = allGraphAdj, allGraphOrb = allGraphOrb, graphBounds = boundTab, 
                          graphInfo = graphInfo, sparse = TRUE)
-  numVars  = ncol(prep$mat)
+  numVars  = choose(numVertices, 2)
   numConst = length(prep$dir)
   numNonZeros = tail(prep$mat@p,1)
   CN = paste0("X", 1:numVars)
@@ -370,12 +375,12 @@ tightenBounds = function(numVertices, allGraphs, allGraphAdj, allGraphOrb, bound
     subsumedL = FALSE
     if (curSolution$lpstat == cplexAPI::CPX_STAT_OPTIMAL) {
       curObjL = curSolution$objval
-      subsumedL = near(curObjL, round(curObjL))
+      subsumedL = near(curObjL, round(curObjL), tol = EPSILON)
       boundL  = as.integer(ifelse(subsumedL, round(curObjL), ceiling(curObjL)))
       if (boundL > prevLowerBound) {
         curDualsL  = curSolution$pi
-        if (!(all(near(curDualsL, 0)))) {
-          proofL   = constructProof(prep, curDualsL[1:numConst], lower = TRUE, shortProofs = shortProofs)
+        if (!(all(near(curDualsL, 0, tol = EPSILON)))) {
+          proofL   = constructProof(prep, curDualsL[1:numConst], lower = TRUE, shortProofs = TRUE)
         }
       }
     }
@@ -397,12 +402,12 @@ tightenBounds = function(numVertices, allGraphs, allGraphAdj, allGraphOrb, bound
         altSolution = cplexAPI::solutionCPLEX(envir, model)
         if (curSolution$lpstat == cplexAPI::CPX_STAT_OPTIMAL) {
           curObjU = altSolution$objval
-          subsumedU = near(curObjU, round(curObjU))
+          subsumedU = near(curObjU, round(curObjU), tol = EPSILON)
           boundU  = as.integer(ifelse(subsumedU, round(curObjU), floor(curObjU)))
           if (boundU < prevUpperBound) {
             curDualsU  = altSolution$pi
-            if (!(all(near(curDualsU, 0)))) {
-              proofU   = constructProof(prep, curDualsU[1:numConst], lower = FALSE, shortProofs = shortProofs)
+            if (!(all(near(curDualsU, 0, tol = EPSILON)))) {
+              proofU   = constructProof(prep, curDualsU[1:numConst], lower = FALSE, shortProofs = TRUE)
             }
           }
         }

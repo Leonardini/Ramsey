@@ -215,7 +215,7 @@ makeIgraph = function(Graph) {
 ### If lower = FALSE the funciton constructs the proof of an upper bound instead
 ### If shortProofs = TRUE, only constructs a short proof version (with bound pointers)
 constructProof = function(LP, dualVariables, lower = TRUE, shortProofs = FALSE) {
-  goodRows   = which(!near(dualVariables, 0))
+  goodRows   = which(!near(dualVariables, 0, tol = EPSILON))
   dualValues = dualVariables[goodRows]
   dualValues = dualValues/min(abs(dualValues))
   dir        = LP$dir[goodRows]
@@ -388,73 +388,39 @@ createPositionMatrix = function(numVertices, symmetric = TRUE) {
 invertNumPairs = function(numPairs) {
   baseNum = (sqrt(numPairs * 8 + 1) + 1)/2
   baseInt = as.integer(baseNum)
-  stopifnot(near(baseNum, baseInt))
+  stopifnot(near(baseNum, baseInt, tol = EPSILON))
   baseInt
 }
 
 ### This function traces back through a list of short proofs to obtain contradictions
 reconstructContradictions = function(allProofs, boundTab, n) {
+  possibleEdges = choose(n, 2)
   lastIter = max(boundTab$iter)
-  lastProofs = boundTab %>%
-    filter(iter == lastIter) %>%
-    group_by(graph) %>%
-    mutate(N = n()) %>%
-    filter(N == 2)
-  if (nrow(lastProofs) > 0) {
-    lastProofs %<>%
-      mutate(lower = max(bound * (direction == "G")), upper = max(bound * (direction == "L"))) %>%
-      filter(upper < lower) %>%
-      select(-N, -lower, -upper) %>%
-      ungroup
-  } else {
-    lastProofs %<>%
-      select(-N) %>%
-      ungroup()
-  }
-  # extraProofs = boundTab %>%
-  #   filter(iter == lastIter) %>%
-  #   filter((direction == "G" & bound == size) | (direction == "L" & bound == 0))
-  ### Changing the entire process to a more general expression involving density
   extraProofs = boundTab %>%
-    filter(iter == lastIter) %>%
-    mutate(density = bound/size) %>% 
-    group_by(direction) %>%
-    mutate(opt = ifelse(direction == "G", max(density), min(density))) %>%
-    filter(near(opt, density)) %>%
-    ungroup %>%
-    arrange(direction)
-  w = nrow(extraProofs)
-  expectedMinSize = extraProofs$opt[1] * choose(n, 2)
-  if (near(extraProofs$opt[1], 1)) {
-    lastProofs %<>%
-      bind_rows(extraProofs %>% 
-                  select(-density, -opt) %>% 
-                  filter(direction == "G"))
-  }
-  if (near(extraProofs$opt[w], 0)) {
-    lastProofs %<>%
-      bind_rows(extraProofs %>% 
-                  select(-density, -opt) %>% 
-                  filter(direction == "L"))
-  }
-  if ((extraProofs$opt[1] > extraProofs$opt[w]) || (near(extraProofs$opt[1], extraProofs$opt[w]) && !near(expectedMinSize, round(expectedMinSize)))) {
-    lastProofs %<>%
-      bind_rows(extraProofs %>% 
-                  select(-density, -opt))
-  }
-  uGraphs = sort(unique(lastProofs$graph))
-  numContradictions = length(uGraphs)
+    filter(iter %in% c(1, lastIter)) %>%
+    mutate(density = bound/size) %>%
+    mutate(expectedSize = density * possibleEdges) %>%
+    select(number, direction, expectedSize)
+  extraProofsG = extraProofs %>%
+    filter(direction == "G") %>%
+    mutate_at("expectedSize", ceiling)
+  extraProofsL = extraProofs %>%
+    filter(direction == "L") %>%
+    mutate_at("expectedSize", floor)
+  lastProofs = inner_join(extraProofsG, extraProofsL, by = join_by(expectedSize > expectedSize))
+  numContradictions = nrow(lastProofs)
   allContradictions = vector("list", numContradictions)
   for (index in 1:numContradictions) {
-    curGraph = uGraphs[index]
-    curLastProof = lastProofs %>%
-      filter(graph == curGraph)
-    curIndices = curLastProof$number
+    curRow = lastProofs %>%
+      slice(index)
+    curIndices = unique(c(curRow$number.x, curRow$number.y))
     allIndices = curIndices
     contradiction = vector("list", lastIter)
     pos = 1
-    contradiction[[pos]] = curLastProof
+    ### Carrying out a breadth-first-like search to reach a contradiction
     while (any(curIndices > 2)) {
+      contradiction[[pos]] = boundTab %>% 
+        slice(curIndices)
       pos = pos + 1
       curIndices = setdiff(curIndices, 1:2)
       if (length(curIndices) > 0) {
@@ -463,8 +429,6 @@ reconstructContradictions = function(allProofs, boundTab, n) {
           unlist() %>%
           c() %>%
           unique()
-        contradiction[[pos]] = boundTab %>%
-          slice(curIndices)
         allIndices %<>% c(curIndices)
       }
     }

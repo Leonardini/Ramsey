@@ -694,6 +694,55 @@ if (!file.exists(curOutFiles[1])) {
   fullCommand  = system(paste(startLine, paste(map_chr(c(settingLines, changeLines, finalLine), ~{paste('"', ., '"', collapse = "")}), collapse = " ")))
 }
 
+### Obsolete portion of code from reconstructContradictions
+reconstructContradictions = function(allProofs, boundTab, n) {
+  lastProofs = boundTab %>%
+    filter(iter == lastIter) %>%
+    group_by(graph) %>%
+    mutate(N = n()) %>%
+    filter(N == 2)
+  maxGroup = 0
+  if (nrow(lastProofs) > 0) {
+    lastProofs %<>%
+      mutate(lower = max(bound * (direction == "G")), upper = max(bound * (direction == "L"))) %>%
+      filter(upper < lower) %>%
+      select(-N, -lower, -upper) %>%
+      mutate(contradictGroup = cur_group_id()) %>%
+      ungroup
+    if (nrow(lastProofs) > 0) {
+      maxGroup = max(lastProofs$contradictGroup)
+    }
+  } else {
+    lastProofs %<>%
+      select(-N) %>%
+      ungroup()
+  }
+  if (numG > 0 && near(extraProofsG$opt[1], 1, tol = EPSILON)) {
+    lastProofs %<>%
+      bind_rows(extraProofsG %>%
+                  mutate(contradictGroup = maxGroup + (1:numG)))
+    maxGroup %<>% add(numG)
+  }
+  if (numL > 0 && near(extraProofsL$opt[1], 0, tol = EPSILON)) {
+    lastProofs %<>%
+      bind_rows(extraProofsL %>%
+                  mutate(contradictGroup = maxGroup + (1:numL)))
+    maxGroup %<>% add(numL)
+  }
+  if (ceiling(expectedMinSize) > floor(expectedMaxSize)) {
+    ### Note that every low, high pair can be the source of a proof in this case
+    numTotal = numG * numL
+    extraProofsG %<>%
+      slice(rep(1:numL, numG)) %>%
+      mutate(contradictGroup = maxGroup + (1:numTotal))
+    extraProofsL %<>%
+      slice(rep(1:numG, each = numL)) %>%
+      mutate(contradictGroup = maxGroup + (1:numTotal))
+    lastProofs %<>%
+      bind_rows(bind_rows(extraProofsG, extraProofsL))
+  }
+}
+
 ### This function computes the best (lower if lower = TRUE, upper otherwise) bound 
 ### for the sum of N [0,1] variables from given coefficient vector and constant value
 ### For instance, given 3x + 4y + 5z <= 6 with x, y, z in [0, 1], the best bound can
