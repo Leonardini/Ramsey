@@ -5,6 +5,60 @@ for (ind in 1:MAX_SIZE) {
   assign(paste0("PERMS", ind), permn(ind), envir = .GlobalEnv)
 }
 
+### This function starts with a density at startN and computes the corresponding
+### density up to stopN; rounding occurs at each step to account for integrality
+### If lower = TRUE, this is a lower density, otherwise, it is an upper density.
+### The density should be specified by 2 integers, ie. (numerator, denominator).
+densityRatchet = function(density, startN, stopN, lower = TRUE) {
+  stopifnot(stopN >= startN)
+  stopifnot(all(density >= 0) && density[1] <= density[2])
+  dMatrix = tibble(ind = startN:stopN, num = density[1], den = density[2]) %>%
+    mutate_all(as.integer)
+  pos = startN
+  while (pos <= stopN) {
+    density[1] %<>% multiply_by(choose(pos, 2))
+    newNum = divide_by_int(density[1], density[2])
+    if (lower && (density[1] %% density[2] != 0)) { 
+      newNum %<>% add(1L)
+    }
+    density = c(newNum, choose(pos, 2))
+    GCD = pracma::gcd(density[1], density[2])
+    density %<>% divide_by(GCD)
+    dMatrix[pos - startN + 1, ] = tibble(ind = pos, num = density[1], den = density[2])
+    pos = pos + 1
+  }
+  dMatrix %<>% 
+    mutate(ratio = num/den)
+  dMatrix
+}
+
+### This function starts with a target density at stopN and finds the required
+### density at startN; rounding occurs at each step to account for integrality
+### If lower = TRUE, this is a lower density, otherwise, it is an upper density.
+### The target should be specified by 2 integers, ie. (numerator, denominator).
+inverseRatchet = function(target, startN, stopN, lower = TRUE) {
+  stopifnot(stopN >= startN)
+  stopifnot(all(target >= 0) && target[1] <= target[2])
+  dMatrix = tibble(ind = startN:stopN, num = target[1], den = target[2]) %>%
+    mutate_all(as.integer)
+  pos = stopN
+  while (pos > startN) {
+    target[1] %<>% multiply_by(choose(pos, 2))
+    newNum = divide_by_int(target[1], target[2])
+    if (target[1] %% target[2] == 0) { 
+      newNum %<>% add(ifelse(lower, -1L, 1L))
+    }
+    target = c(newNum, choose(pos, 2))
+    GCD = pracma::gcd(target[1], target[2])
+    target %<>% divide_by(GCD)
+    dMatrix[pos - startN, ] = tibble(ind = pos - 1, num = target[1], den = target[2])
+    pos = pos - 1
+  }
+  dMatrix %<>% 
+    mutate(ratio = num/den)
+  dMatrix
+}
+
 ### This function extracts connected graphs from the files made by McKay's nauty
 ### Make sure that the conversion is done with the -el0o1 option in nauty::showg
 ### If extremeOnly = TRUE, only keeps the graphs with sizes within 1 of min/max.
@@ -276,7 +330,7 @@ permuteGraph = function(Graph, orbits = NULL) {
 ### as well as all vertex and non-trivial possible edge orbits under its action.
 ### Note: for the edges, each orbit is listed in the format c(tailList, headList)
 ### The group is not returned, only the lexicographic comparisons it entails are.
-getOrbits = function(Graph) {
+getOrbits = function(Graph, getMaxSym = FALSE) {
   n = max(Graph)
   iGraph = makeIgraph(Graph)
   autoGens = automorphism_group(iGraph)
@@ -294,7 +348,7 @@ getOrbits = function(Graph) {
   auxG = makeIgraph(allEdges)
   orbitsE = split(fullEdges, clusters(auxG)$membership)
   orbitsE = orbitsE[sapply(orbitsE, length) > 2]
-  permGroup = constructPermGroup(autoGens, autoSize, returnID = FALSE)
+  permGroup = constructPermGroup(autoGens, autoSize, returnID = TRUE)
   comps = getComparisons(permGroup)
   # comps = getLexConstraints(autoGens, autoSize)
   output = list(orbitsV = orbitsV, orbitsE = orbitsE, comps = comps, autoSize = autoSize, n = n)
@@ -305,9 +359,14 @@ getOrbits = function(Graph) {
 ### that the lexicographically smallest element of a coset of its input satisfies
 ### The input is the permutation group with one column per element minus identity
 ### The output is a two-column matrix where a row [ab] corresponds to s[a] < s[b]
+### NOTE: assumes that if the identity is included, then it has to be in column 1
 getComparisons = function(permGroup) {
   nr = nrow(permGroup)
   nc = ncol(permGroup)
+  if (all(permGroup[, 1] == 1:nr)) {
+    permGroup = permGroup[, -1, drop = FALSE]
+    nc = nc - 1
+  }
   autoComp = apply(permGroup, 2, function(x) { min(which(x != 1:nr)) })
   autoNext = permGroup[cbind(autoComp, 1:nc)]
   goodComps = tibble(first = autoComp, second = autoNext) %>%
