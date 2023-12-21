@@ -37,7 +37,7 @@ findMinimalGraphSet = function(n = 9L, r = 3L, s = 4L, maxOrder = 6L, symRS = FA
     altInds = setdiff(curInds, testElement)
     altRes  = iterateLPProof(n = n, r = r, s = s, maxOrder = maxOrder, symRS = symRS, lowerOnly = lowerOnly, minAuto = minAuto, factor = factor, eps = eps, strongCuts = strongCuts, 
     extremeOnly = extremeOnly, treesOnly = treesOnly, twoTreesOnly = twoTreesOnly, ETOnly = ETOnly, partiteOnly = partiteOnly, completeOnly = completeOnly, inds = altInds)
-    if (length(altRes) > 1) {
+    if (!is.null(altRes[[4]])) {
       print(paste("Removing", testElement, "leaves the contradiction valid"))
       lastSolution = altRes
       bestSolution = prepareBestProof(altRes[[4]], altRes[[3]], labels = outer(LETTERS, letters, paste0), r = r, s = s, plotGraphs = FALSE)
@@ -133,7 +133,7 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = round(2 * n / 3), sy
   curSupport = min(r, s) + 1
   curOrder   = curSupport
   curRound   = 0
-  while (curOrder <= maxOrder) {
+  while (curOrder <= maxOrder && curSupport <= n) {
     curGraphTab = graphTab %>% 
       filter(order >= min(r, s) & order <= curOrder)
     print(paste("Exploring graphs on up to", curOrder, "vertices with support size", curSupport))
@@ -192,7 +192,6 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = round(2 * n / 3), sy
       } else {
         if (curSupport > n) {
           print("Not enough evidence for a contradiction!")
-          return(FALSE)
         }
       }
     }
