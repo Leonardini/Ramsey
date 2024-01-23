@@ -8,7 +8,7 @@ source("Ramsey.R")
 # ResU = optimiseProofs(Qu[[2]])
 # save(ResU, file = "OptimisedProofsR3S4MinimalExtreme.RData")
 
-# Qv = findMinimalGraphSet(extremeOnly = TRUE, inds = c(5, 10, 11, 15, 22, 24, 29, 30)) # The original set leading to contradiction being lost we simply add 30 at the end
+# Qv = findMinimalGraphSet(extremeOnly = TRUE, inds = c(5, 10, 11, 15, 22, 24, 29, 30)) # The original set leading to contradiction being lost; simply add 30 at the end
 # save(Qv, file = "ResultsR3S4MinimalExtremeOnlyInitial.RData")
 # load("ResultsR3S4MinimalExtremeOnlyInitial.RData")
 # ResV = optimiseProofs(Qv[[2]])
@@ -61,8 +61,29 @@ source("Ramsey.R")
 
 # T = iterateLPProof(n = 9L, r = 3L, s = 4L, maxOrder = 8L, minAuto = 24L, factor = TRUE)
 # save(T, file = "ProofR4S3MinimalAuto24Factor.RData")
-Qt = findMinimalGraphSet(maxOrder = 8L, minAuto = 24L, factor = TRUE, inds = c(3,4,5,7,11,12,13,20,23,35,37,39,41,42,44,46,48,49,50,51,52,59,68,69,82,86,93,95,101,102,
-                                                                               104,107,109,114,119,121,122,123,124,128,139,143,145,152,159,166,170,171,181,189,197,198,
-                                                                               204,209,210,216,219,223,227,231,236,240,247,253,257,261,262,266,270,275,276,282,284,286,
-                                                                               288,291,292,294,296,299,302))
-save(Qt, file = "ResultsR3S4MinimalAuto24Factor.RData")
+# Qt = findMinimalGraphSet(maxOrder = 8L, minAuto = 24L, factor = TRUE, inds = c(3,4,5,7,11,12,13,20,23,35,37,39,41,42,44,46,48,49,50,51,52,59,68,69,82,86,93,95,101,102,
+#                                                                                104,107,109,114,119,121,122,123,124,128,139,143,145,152,159,166,170,171,181,189,197,198,
+#                                                                                204,209,210,216,219,223,227,231,236,240,247,253,257,261,262,266,270,275,276,282,284,286,
+#                                                                                288,291,292,294,296,299,302))
+# save(Qt, file = "ResultsR3S4MinimalAuto24Factor.RData")
+
+Sq = iterateLPProof(n = 9L, r = 3L, s = 4L, maxOrder = 6L, star = 3L)
+save(Sq, file = "ProofR3S4Star3.RData")
+miniS = findMinimalGraphSet(maxOrder = 6L, star = 3L, inds = c(5,9,10,13,23,27,28,29,30,31,71,87,91,98,111,120,125,134,142))
+save(miniS, file = "ResultsR3S4MinimalStar3.RData")
+Su = iterateLPProof(n = 9L, r = 3L, s = 4L, maxOrder = 6L, star = 3L, extremeOnly = TRUE)
+save(Su, file = "ProofR3S4ExtremeOnlyStar3.RData")
+miniU = findMinimalGraphSet(maxOrder = 6L, star = 3L, extremeOnly = TRUE, inds = c(5,9,10,11,15,19,20,22,24,29))
+save(miniU, file = "ResultsR3S4MinimalExtremeOnlyStar3.RData")
+Sx = iterateLPProof(n = 9L, r = 3L, s = 4L, maxOrder = 8L, star = 3L, treesOnly = TRUE)
+save(Sx, file = "ProofR3S4TreesOnlyStar3.RData")
+miniX = findMinimalGraphSet(maxOrder = 8L, star = 3L, treesOnly = TRUE, inds = c(5,7,8,10,13,14,16,23,24,27,32,42,43,46))
+save(miniX, file = "ResultsR3S4MinimalTreesOnlyStar3.RData")
+Sy = iterateLPProof(n = 9L, r = 3L, s = 4L, maxOrder = 6L, star = 3L, lowerOnly = TRUE)
+save(Sy, file = "ProofR3S4LowerOnlyStar3.RData")
+miniY = findMinimalGraphSet(maxOrder = 6L, star = 3L, lowerOnly = TRUE, inds = c(5,9,10,11,18,19,21,24,27,29,30,31,33,35,63,91))
+save(miniY, file = "ResultsR3S4MinimalLowerOnlyStar3.RData")
+Sz = iterateLPProof(n = 9L, r = 3L, s = 4L, maxOrder = 6L, star = 3L, partiteOnly = TRUE)
+save(Sz, file = "ProofR3S4PartiteOnlyStar3.RData")
+miniZ = findMinimalGraphSet(maxOrder = 6L, star = 3L, partiteOnly = TRUE, inds = c(5,8,9,11,13,16,17,27))
+save(miniZ, file = "ResultsR3S4MinimalPartiteOnlyStar3.RData")

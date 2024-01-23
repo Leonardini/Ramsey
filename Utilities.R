@@ -452,9 +452,18 @@ invertNumPairs = function(numPairs) {
 }
 
 ### This function traces back through a list of short proofs to obtain contradictions
-reconstructContradictions = function(allProofs, boundTab, n) {
-  possibleEdges = choose(n, 2)
+reconstructContradictions = function(allProofs, boundTab, n, specialIndex = NULL) {
   lastIter = max(boundTab$iter)
+  possibleEdges = choose(n, 2)
+  lastProofs = tibble()
+  if (!is.null(specialIndex)) {
+    specialBound = boundTab %>% 
+      filter(graph == specialIndex & direction == "G") %>%
+      mutate(density = bound/size) %>%
+      mutate(expectedSize = density * possibleEdges) %>%
+      select(number, direction, expectedSize)
+    lastProofs = inner_join(specialBound, specialBound, by = join_by(expectedSize >= expectedSize))
+  }
   extraProofs = boundTab %>%
     filter(iter %in% c(1, lastIter)) %>%
     mutate(density = bound/size) %>%
@@ -466,7 +475,7 @@ reconstructContradictions = function(allProofs, boundTab, n) {
   extraProofsL = extraProofs %>%
     filter(direction == "L") %>%
     mutate_at("expectedSize", floor)
-  lastProofs = inner_join(extraProofsG, extraProofsL, by = join_by(expectedSize > expectedSize))
+  lastProofs = bind_rows(lastProofs, inner_join(extraProofsG, extraProofsL, by = join_by(expectedSize > expectedSize)))
   numContradictions = nrow(lastProofs)
   allContradictions = vector("list", numContradictions)
   for (index in 1:numContradictions) {
