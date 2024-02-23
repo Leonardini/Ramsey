@@ -20,6 +20,7 @@ source("Ramsey/Utilities.R")
 ### TODO: Consider adding a global variable tracking subgraph relationships, to be created once at the start; it can be a sparse matrix or a tibble, depending on needs.
 ### TODO: Write an algorithm that spreads the bound density to support n-1 then tries to increase or keep the density in all future rounds; in order to do so it needs to
 ### keep a best bound tab on all the graphs, and for a lower bound t, add the corresponding lower bounds to all subgraphs with < t edges removed and all supergraphs, too
+### TODO: For more general Ramsey values, allow r and s to represent graphs rather than integers and ensure that each one is put into its canonical form for consistency!
 
 ### This function iteratively constructs a minimal set of graphs sufficient for a proof
 ### that Ramsey(r, s) <= n; all of its other arguments are exactly as in iterateLPProof
@@ -129,7 +130,8 @@ iterateLPProof = function(n = 6L, r = 3L, s = r, maxOrder = round(2 * n / 3), sy
   numGraphs = length(goodGraphs)
   allGraphAdj = vector("list", numGraphs)
   allGraphOrb = vector("list", numGraphs)
-  boundTab = tibble(number = 1:2, support = c(r, s), graph = c(1, endpoint), direction = c("G", "L"), bound = c(1, choose(s, 2) - 1), round = 0L, subsumed = FALSE, size = choose(c(r, s), 2))
+  boundTab = tibble(number = 1:2, support = c(r, s), graph = c(1, endpoint), direction = c("G", "L"), 
+                    bound = c(1, length(allGraphs[[endpoint]])/2 - 1), round = 0L, subsumed = FALSE, size = c(length(allGraphs[[1]])/2, length(allGraphs[[endpoint]])/2))
   boundIndex = 3
   proofs     = vector("list", n^2)
   curSupport = min(r, s) + 1
