@@ -5,6 +5,74 @@ for (ind in 1:MAX_SIZE) {
   assign(paste0("PERMS", ind), permn(ind), envir = .GlobalEnv)
 }
 
+### This auxiliary function converts an igraph into a flat graph representation
+flattenGraph = function(iGraph) {
+  eList = get.edgelist(iGraph)
+  output = as.vector(eList[order(eList[, 1], eList[, 2]), ])
+  output
+}
+
+### This auxiliary function converts a flat graph representation into an igraph
+makeIgraph = function(Graph) {
+  output = graph_from_edgelist(matrix(Graph, ncol = 2), directed = FALSE)
+  output
+}
+
+### This auxiliary function converts an igraph into its canonical representative
+canonicallyOrderGraph = function(iGraph) {
+  output = permute(iGraph, canonical_permutation(iGraph)$labeling)
+  output
+}
+
+### This auxiliary function makes all graphs in a given input file canonical
+canonicallyOrderAllGraphs = function(graphFile, varName = "allG") {
+  load(graphFile)
+  allGraphs = get(varName)
+  L = length(allGraphs)
+  print(paste("There are", L, "graphs to process"))
+  for (ind in 1:L) {
+    if (ind %% 10000 == 0) { print(ind) }
+    curGraph = allGraphs[[ind]] %>%
+      makeIgraph %>%
+    canonicallyOrderGraph %>%
+    flattenGraph
+    allGraphs[[ind]] = curGraph
+  }
+  assign(varName, allGraphs)
+  save(list = varName, file = graphFile)
+  allGraphs
+}
+
+### This function extracts all the constrained graphs from a given list of files
+### varName specifies the name of the variable under which the results are saved
+### These results are expected to be the outputs of the iterateLPProof function
+combineUsefulGraphs = function(listOfFiles = paste0("ProofR5S3", c("ET", "Trees"), "OnlyPart2NoContradiction.RData"), varName = "Z", outFile = "Custom.RData") {
+  Len = length(listOfFiles)
+  allRes = vector("list", Len)
+  for (ind in 1:Len) {
+    print(ind)
+    fname = listOfFiles[[ind]]
+    load(fname)
+    allRes[[ind]] = get(varName)
+    rm(list = varName)
+  }
+  usefulGraphs = vector("list", Len)
+  for (ind in 1:Len) {
+    curRes = allRes[[ind]]
+    allGraphs = curRes$graphs
+    allBounds = curRes$boundTab
+    graphInds = sort(unique(allBounds$graph))
+    useGraphs = allGraphs[graphInds]
+    usefulGraphs[[ind]] = useGraphs
+  }
+  usefulGraphs %<>% 
+    do.call(c, .)
+  badInds = which(duplicated(usefulGraphs))
+  allG = usefulGraphs[-badInds]
+  save(allG, file = outFile)
+  allG
+}
+
 ### This function starts with a density at startN and computes the corresponding
 ### density up to stopN; rounding occurs at each step to account for integrality
 ### If lower = TRUE, this is a lower density, otherwise, it is an upper density.
@@ -255,12 +323,6 @@ identifySubsumedBounds = function(allGraphs, boundTab, graphInfo, lower = TRUE) 
   }
   fullTab %<>% select(number, support, graph, direction, bound, round, subsumed, size)
   output = bind_rows(preSubsumed, fullTab)
-  output
-}
-
-### This auxiliary function converts a graph vector representation into an igraph
-makeIgraph = function(Graph) {
-  output = graph_from_edgelist(matrix(Graph, ncol = 2), directed = FALSE)
   output
 }
 
