@@ -5,6 +5,39 @@ for (ind in 1:MAX_SIZE) {
   assign(paste0("PERMS", ind), permn(ind), envir = .GlobalEnv)
 }
 
+### This auxiliary function checks if the subgraph is uniformly embeddable into
+### the graph, meaning that every edge is represented the same number of times
+checkUE = function(Graph, Subgraph) {
+  if (!("igraph" %in% class(Graph))) {
+    Graph %<>% makeIgraph()
+  }
+  if (!("igraph" %in% class(Subgraph))) {
+    Subgraph %<>% makeIgraph()
+  }
+  if ((vcount(Subgraph) > vcount(Graph)) || (vcount(Subgraph) == vcount(Graph) && ecount(Subgraph) >= ecount(Graph))) {
+    return(FALSE)
+  }
+  check = subgraph_isomorphisms(pattern = Subgraph, target = Graph)
+  L = length(check)
+  m = ecount(Subgraph)
+  M = ecount(Graph)
+  N = vcount(Graph)
+  estK = (L * m) / M
+  if (L == 0 || !near(estK, round(estK))) { 
+    return(FALSE)
+  }
+  subEdges = as_edgelist(Subgraph)
+  fullMap = lapply(check, function(x) { matrix(x[subEdges], ncol = 2) }) %>%
+    do.call(rbind, .)
+  swapOrder = which(fullMap[,1] > fullMap[,2])
+  if (length(swapOrder) > 0) {
+    fullMap[swapOrder, ] = fullMap[swapOrder, 2:1]
+  }
+  sparseMat = sparseMatrix(i = fullMap[, 1], j = fullMap[, 2], x = 1, dims = c(N, N), index1 = TRUE, use.last.ij = FALSE)
+  result = all(near(sparseMat@x, estK))
+  result
+}
+
 ### This auxiliary function converts an igraph into a flat graph representation
 flattenGraph = function(iGraph) {
   eList = get.edgelist(iGraph)
@@ -390,29 +423,27 @@ permuteGraph = function(Graph, orbits = NULL) {
 
 ### This function computes a graph's full automorphism group from its generators,
 ### as well as all vertex and non-trivial possible edge orbits under its action.
-### Note: for the edges, each orbit is listed in the format c(tailList, headList)
+### Note: the edge orbits are numbered with the universal edge-numbering scheme.
 ### The group is not returned, only the lexicographic comparisons it entails are.
-getOrbits = function(Graph, getMaxSym = FALSE) {
+getOrbits = function(Graph) {
   n = max(Graph)
   iGraph = makeIgraph(Graph)
+  nC2 = choose(n, 2)
   autoGens = automorphism_group(iGraph)
   autoSize = as.integer(automorphisms(iGraph)$group_size)
   L = length(autoGens)
   if (L == 0) { return(list(orbitsV = split(1:n, 1:n), orbitsE = c(), comps = matrix(NA, 0, 2), autoSize = autoSize, n = n)) }
-  if (autoSize == factorial(n)) { return(list(orbitsV = list(1:n), orbitsE = list(combn2(1:n)), comps = cbind(1:(n-1), 2:n), autoSize = autoSize, n = n)) }
+  fullEdges = createPositionMatrix(n, twoColumn = TRUE)
+  if (autoSize == factorial(n)) { return(list(orbitsV = list(1:n), orbitsE = list(fullEdges), comps = cbind(1:(n-1), 2:n), autoSize = autoSize, n = n)) }
   autoGens %<>% do.call(rbind, .)
   orbitsV = getMeet(autoGens)
-  auxMatrix = createPositionMatrix(n, symmetric = TRUE)
-  fullEdges = combn2(1:n)
-  nC2 = nrow(fullEdges)
-  # allEdges = cbind(rep(1:nC2, L), auxMatrix[cbind(as.vector(permGroup[fullEdges[, 1], , drop = FALSE]), as.vector(permGroup[fullEdges[, 2], , drop = FALSE]))])
+  auxMatrix = createPositionMatrix(n, symmetric = TRUE, twoColumn = FALSE)
   allEdges = cbind(rep(1:nC2, each = L), auxMatrix[cbind(as.vector(autoGens[, fullEdges[, 1], drop = FALSE]), as.vector(autoGens[, fullEdges[, 2], drop = FALSE]))])
   auxG = makeIgraph(allEdges)
   orbitsE = split(fullEdges, clusters(auxG)$membership)
   orbitsE = orbitsE[sapply(orbitsE, length) > 2]
-  permGroup = constructPermGroup(autoGens, autoSize, returnID = TRUE)
+  permGroup = constructPermGroup(autoGens, autoSize)
   comps = getComparisons(permGroup)
-  # comps = getLexConstraints(autoGens, autoSize)
   output = list(orbitsV = orbitsV, orbitsE = orbitsE, comps = comps, autoSize = autoSize, n = n)
   output
 }
@@ -445,7 +476,7 @@ getComparisons = function(permGroup) {
 ### This function constructs a permutation group of given size from its generators
 ### The construction works by an implicit breadth-first search of the Cayley graph
 ### NOTE: The generators are specified by row, but the group is returned by column
-constructPermGroup = function(generatorList, numElts = NA, returnID = FALSE) {
+constructPermGroup = function(generatorList, numElts = NA) {
   n = ncol(generatorList)
   L = nrow(generatorList)
   if (is.na(numElts)) { numElts = factorial(n) }
@@ -470,7 +501,6 @@ constructPermGroup = function(generatorList, numElts = NA, returnID = FALSE) {
     numActive = length(curActive)
   }
   allElts = allElts[1:pos, , drop = FALSE]
-  if (!returnID) { allElts = allElts[-1, , drop = FALSE] }
   allElts = t(allElts)
   allElts
 }
@@ -491,11 +521,16 @@ getMeet = function(perms) {
 }
 
 ### This function creates a matrix M with M[i,j] being the edge position of (ij)
-### The edges are ordered as follows: 12, 13, ..., 1N, 23, ..., 2N, ..., (N-1)N
+### The edges are ordered as: 12, 13, 23, 14, 24, 34, ..., 1N, 2N, ..., (N-1)N
 ### If symmetric = TRUE, the lower diagonal contains the same indices, reflected
-createPositionMatrix = function(numVertices, symmetric = TRUE) {
+### If twoColumn = TRUE, returns the list of edges in two-column format instead!
+createPositionMatrix = function(numVertices, symmetric = TRUE, twoColumn = FALSE) {
   numPos = choose(numVertices, 2)
-  allPos = combn2(1:numVertices)
+  allPos = (numVertices + 1) - combn2(1:numVertices)
+  allPos = allPos[numPos:1, 2:1]
+  if (twoColumn) {
+    return(allPos)
+  }
   outMat = matrix(0, numVertices, numVertices)
   outMat[allPos] = 1:numPos
   if (symmetric) {

@@ -81,24 +81,17 @@ source("Ramsey.R")
 # save(Z, file = "ProofR5S3TreesOnlyPart1.RData")
 
 # STRATEGY: try different graph families up to a small size and combine all of them later
-# Z = iterateLPProof(n = 10L, r = 5L, s = 3L, maxOrder = 10L, ETOnly = TRUE, star = 9L)
+# Z = iterateLPProof(n = 11L, r = 5L, s = 3L, maxOrder = 11L, ETOnly = TRUE, star = 10L, strongCuts = FALSE)
 # save(Z, file = "ProofR5S3ETOnlyPart2NoContradiction.RData")
-# Z = iterateLPProof(n = 10L, r = 5L, s = 3L, maxOrder = 10L, treesOnly = TRUE, star = 9L)
+# Z = iterateLPProof(n = 11L, r = 5L, s = 3L, maxOrder = 11L, treesOnly = TRUE, star = 10L, strongCuts = FALSE)
 # save(Z, file = "ProofR5S3TreesOnlyPart2NoContradiction.RData")
 # W = combineUsefulGraphs()
-# TEMPORARY FIX: removing the duplicates after converting everything to canonical form
-# W = canonicallyOrderAllGraphs("Custom.RData")
-# W = W[!duplicated(W)]
-# allG = W
-# save(allG, file = "Custom.RData")
-# Z = iterateLPProof(n = 14L, r = 5L, s = 3L, maxOrder = 10L, custom = TRUE, star = 9L)
+# Z = iterateLPProof(n = 14L, r = 5L, s = 3L, maxOrder = 11L, custom = TRUE, star = 10L, strongCuts = FALSE)
 
-# Z = iterateLPProof(n = 10L, r = 5L, s = 3L, maxOrder = 10L, extremeOnly = TRUE, star = 9L)
-# save(Z, file = "ProofR5S3ExtremeOnlyPart2NoContradiction.RData")
-# Z = iterateLPProof(n = 10L, r = 5L, s = 3L, maxOrder = 10L, completeOnly = TRUE, star = 9L)
-# save(Z, file = "ProofR5S3CompleteOnlyPart2NoContradiction.RData")
-# Z = iterateLPProof(n = 10L, r = 5L, s = 3L, maxOrder = 10L, twoTreesOnly = TRUE, star = 9L)
+# Z = iterateLPProof(n = 11L, r = 5L, s = 3L, maxOrder = 11L, twoTreesOnly = TRUE, strongCuts = FALSE)
 # save(Z, file = "ProofR5S3TwoTreesOnlyPart2NoContradiction.RData")
+# Z = iterateLPProof(n = 11L, r = 5L, s = 3L, maxOrder = 11L, extremeOnly = TRUE, star = 10L, strongCuts = FALSE)
+# save(Z, file = "ProofR5S3ExtremeOnlyPart2NoContradiction.RData")
 
 # Z = iterateLPProof(n = 18L, r = 4L, s = 4L, maxOrder = 12L, twoTreesOnly = TRUE, star = 9L)
 # save(Z, file = "ProofR4S4TwoTreesOnly.RData")

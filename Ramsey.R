@@ -15,13 +15,13 @@ setwd(WORK_DIR)
 EPSILON = .Machine$double.eps^0.5 # Tolerance for deciding if two floating-point numbers are equal
 source("Ramsey/Utilities.R")
 
-### TODO: BRING ALL THE GRAPHS INTO A CANONICAL PERMUTATION BEFORE PROCESSING THEM! ### TODO: CHANGE THE APPROACH TO ELIMINATING WEAK CUTS TO AN INCREMENTAL ONE!
+### TODO: Fix the strongCuts = TRUE option, as it is currently failing (even for noMult3)
 ### TODO: For lower bounds consider implementing a version that looks for cyclic orientations too; the idea is to only constrain delta vectors which admit a bipartition!
 ### TODO: Explore the use of DFS instead of BFS in searching for the proof, so that as soon as a new tighter bound is found, it is immediately added to the constraints.
 ### TODO: Consider adding a global variable tracking subgraph relationships, to be created once at the start; it can be a sparse matrix or a tibble, depending on needs.
+### TODO: Refine this variable to also indicate whether a subgraph is uniformly embeddable into the supergraph, and use it to identify the maximum 'final density' values.
 ### TODO: Write an algorithm that spreads the bound density to support n-1 then tries to increase or keep the density in all future rounds; in order to do so it needs to
-### keep a best bound tab on all the graphs, and for a lower bound t, add the corresponding lower bounds to all subgraphs with < t edges removed and all supergraphs, too
-### TODO: For more general Ramsey values, allow r and s to represent graphs rather than integers and ensure that each one is put into its canonical form for consistency!
+### keep a best bound tab on all the graphs, and for a lower bound t, add the corresponding lower bounds to all subgraphs with < t edges removed and all supergraphs, too.
 
 ### This function iteratively constructs a minimal set of graphs sufficient for a proof
 ### that Ramsey(r, s) <= n; all of its other arguments are exactly as in iterateLPProof
@@ -86,7 +86,7 @@ findMinimalGraphSet = function(n = 9L, r = 3L, s = 4L,
 iterateLPProof = function(n = 6L, r = 3L, s = r, 
                           maxOrder = round(2 * n / 3), symRS = (r == s), lowerOnly = FALSE, minAuto = NULL, factor = FALSE,
                           extremeOnly = FALSE, treesOnly = FALSE, twoTreesOnly = FALSE, ETOnly = FALSE, partiteOnly = FALSE, completeOnly = FALSE, inds = NULL, 
-                          custom = FALSE, eps = NA, strongCuts = TRUE, star = NULL) {
+                          custom = FALSE, eps = NA, strongCuts = FALSE, star = NULL) {
   possibleEdges = choose(n, 2)
   endpoint = ifelse(r == s, 1, 2)
   if (custom) {
