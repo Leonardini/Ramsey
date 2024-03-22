@@ -5,15 +5,49 @@ for (ind in 1:MAX_SIZE) {
   assign(paste0("PERMS", ind), permn(ind), envir = .GlobalEnv)
 }
 
+findAllUE = function(minOrder = 3L, maxOrder = 8L) {
+  goodPairs = matrix(NA, 10^(maxOrder - minOrder + 1L), 2)
+  pos = 1
+  allGraphs = list()
+  for (gorder in minOrder:maxOrder) { 
+    allGraphs %<>% 
+      c(getGraphs(gorder)) 
+  }
+  graphTab = tibble(index = 1:length(allGraphs), size = map_int(allGraphs, length)/2, redSize = size - 2L, order = map_int(allGraphs, max), 
+                    minDeg = map_int(allGraphs, ~{min(table(.))}), maxDeg = map_int(allGraphs, ~{max(table(.))}))
+  allComp = inner_join(graphTab, graphTab, by = join_by(size <= redSize, order <= order, minDeg <= minDeg, maxDeg <= maxDeg)) %>%
+    select(index.x, index.y, size.x, size.y)
+  smallPrimes = c(2L, 3L, 5L, 7L, 11L, 13L, 17L, 19L, 23L, 29L, 31L, 37L, 41L, 43L, 47L, 53L, 59L, 61L, 67L, 71L, 73L)
+  maxSize = max(allComp$size.y)
+  for (prime in smallPrimes) {
+    if (prime <= maxSize) {
+      allComp %<>% 
+        mutate_at("rp", ~{. & (mod(size.x, prime) != 0 | mod(size.y, prime) != 0)})
+      print(prime)
+    }
+  }
+  allComp %<>%
+    filter(rp)
+  allGraphs %<>%
+    sapply(makeIgraph)
+  numComp = nrow(allComp)
+  for (index in 1:numComp) {
+    if (index %% 10000 == 0) { print(index) }
+    curPair = allComp %>%
+      slice(index)
+    ind1 = curPair$index.x
+    ind2 = curPair$index.y
+    if (checkUE(allGraphs[[ind1]], allGraphs[[ind2]])) {
+      goodPairs[pos,] = c(ind1, ind2)
+      pos = pos + 1
+    }
+  }
+  goodPairs
+}
+
 ### This auxiliary function checks if the subgraph is uniformly embeddable into
 ### the graph, meaning that every edge is represented the same number of times
 checkUE = function(Graph, Subgraph) {
-  if (!("igraph" %in% class(Graph))) {
-    Graph %<>% makeIgraph()
-  }
-  if (!("igraph" %in% class(Subgraph))) {
-    Subgraph %<>% makeIgraph()
-  }
   if ((vcount(Subgraph) > vcount(Graph)) || (vcount(Subgraph) == vcount(Graph) && ecount(Subgraph) >= ecount(Graph))) {
     return(FALSE)
   }
